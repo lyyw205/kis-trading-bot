@@ -1,0 +1,309 @@
+import sqlite3
+from datetime import datetime
+import json
+
+class BotDatabase:
+    def __init__(self, db_name="trading.db"):
+        self.db_name = db_name
+        self.init_db()
+        
+    def init_db(self):
+        conn = sqlite3.connect(self.db_name)
+        c = conn.cursor()
+
+        # 1) 매매 내역
+        c.execute('''CREATE TABLE IF NOT EXISTS trades
+                    (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     time TEXT,
+                     symbol TEXT,
+                     type TEXT,
+                     price REAL,
+                     qty INTEGER,
+                     profit REAL,
+                     signal_id INTEGER,
+                     ml_proba REAL,
+                     entry_allowed INTEGER)''')
+
+        # 2) 로그
+        c.execute('''CREATE TABLE IF NOT EXISTS logs
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      time TEXT,
+                      message TEXT)''')
+
+        # 3) 신호 / 상태 스냅샷
+        c.execute('''CREATE TABLE IF NOT EXISTS signals
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      time TEXT,
+                      region TEXT,
+                      symbol TEXT,
+                      price REAL,
+                      at_support INTEGER,
+                      is_bullish INTEGER,
+                      price_up INTEGER,
+                      lookback INTEGER,
+                      band_pct REAL,
+                      has_stock INTEGER,
+                      entry_signal INTEGER,
+                      ml_proba REAL,
+                      entry_allowed INTEGER,
+                      note TEXT)''')
+        
+        # 4) OHLCV 저장 테이블
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS ohlcv_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                region TEXT,
+                symbol TEXT,
+                interval TEXT,    
+                dt TEXT,          
+                open REAL,
+                high REAL,
+                low REAL,
+                close REAL,
+                volume REAL,
+                UNIQUE(region, symbol, interval, dt) 
+            )
+        """)
+
+        # 5) 간단한 모델 버전 기록 (train_seq_model.py에서 사용)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS models (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT,
+                path TEXT,
+                n_samples INTEGER,
+                val_accuracy REAL
+            )
+        """)
+
+        # 6) 상세 모델 메타 정보 (옵션: 수동으로 쓸 때 사용)
+        c.execute('''CREATE TABLE IF NOT EXISTS model_versions
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      name TEXT,
+                      version TEXT,
+                      created_at TEXT,
+                      params_json TEXT,
+                      note TEXT)''')
+
+        # 7) 백테스트 결과 요약
+        c.execute('''CREATE TABLE IF NOT EXISTS backtests
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      model_id INTEGER,
+                      start_date TEXT,
+                      end_date TEXT,
+                      trades INTEGER,
+                      win_rate REAL,
+                      avg_profit REAL,
+                      cum_return REAL,
+                      max_dd REAL,
+                      note TEXT,
+                      FOREIGN KEY(model_id) REFERENCES model_versions(id))''')
+
+        # 8) settings (active_model_path, ml_threshold 등)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+
+        conn.commit()
+        conn.close()
+        
+    # -----------------------------
+    # OHLCV 저장 관련
+    # -----------------------------
+    def save_ohlcv_batch(self, rows):
+        """
+        rows: [
+            (region, symbol, interval, dt, open, high, low, close, volume),
+            ...
+        ]
+        """
+        if not rows:
+            return
+        try:
+            conn = sqlite3.connect(self.db_name)
+            c = conn.cursor()
+            c.executemany("""
+                INSERT OR IGNORE INTO ohlcv_data
+                (region, symbol, interval, dt, open, high, low, close, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, rows)
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            self.log(f"⚠️ save_ohlcv_batch 실패: {e}")
+
+    def save_ohlcv_df(self, region, symbol, interval, df):
+        """
+        df: index = datetime, columns = ['open','high','low','close','volume']
+        """
+        if df is None or df.empty:
+            return
+
+        rows = []
+        for idx, row in df.iterrows():
+            dt_str = idx.strftime("%Y-%m-%d %H:%M:%S")
+            rows.append((
+                region,
+                symbol,
+                interval,
+                dt_str,
+                float(row["open"]),
+                float(row["high"]),
+                float(row["low"]),
+                float(row["close"]),
+                float(row["volume"]),
+            ))
+
+        self.save_ohlcv_batch(rows)
+
+    # -----------------------------
+    # 로그
+    # -----------------------------
+    def log(self, message):
+        try:
+            conn = sqlite3.connect(self.db_name)
+            c = conn.cursor()
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            c.execute("INSERT INTO logs (time, message) VALUES (?, ?)", (now, message))
+            conn.commit()
+            conn.close()
+            print(f"[{now}] {message}")
+        except:
+            pass
+
+    # -----------------------------
+    # 트레이드 / 시그널
+    # -----------------------------
+    def save_trade(self, symbol, type, price, qty,
+                   profit=0, signal_id=None,
+                   ml_proba=None, entry_allowed=None):
+        try:
+            conn = sqlite3.connect(self.db_name)
+            c = conn.cursor()
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            c.execute(
+                """INSERT INTO trades
+                   (time, symbol, type, price, qty, profit,
+                    signal_id, ml_proba, entry_allowed)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    now, symbol, type, price, qty, profit,
+                    signal_id,
+                    None if ml_proba is None else float(ml_proba),
+                    None if entry_allowed is None else int(entry_allowed)
+                )
+            )
+            conn.commit()
+            conn.close()
+        except:
+            pass
+
+    def save_signal(self, *, region, symbol, price,
+                    at_support, is_bullish, price_up,
+                    lookback, band_pct, has_stock,
+                    entry_signal, ml_proba=None,
+                    entry_allowed=None,
+                    note=""):
+        try:
+            conn = sqlite3.connect(self.db_name)
+            c = conn.cursor()
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            c.execute(
+                """INSERT INTO signals
+                   (time, region, symbol, price,
+                    at_support, is_bullish, price_up,
+                    lookback, band_pct, has_stock,
+                    entry_signal, ml_proba, entry_allowed, note)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    now, region, symbol, price,
+                    int(at_support), int(is_bullish), int(price_up),
+                    lookback, band_pct, int(has_stock),
+                    int(entry_signal),
+                    None if ml_proba is None else float(ml_proba),
+                    None if entry_allowed is None else int(entry_allowed),
+                    note
+                )
+            )
+            signal_id = c.lastrowid
+            conn.commit()
+            conn.close()
+            return signal_id
+        except Exception:
+            return None
+
+    # -----------------------------
+    # 모델 버전(상세 메타) 저장
+    # -----------------------------
+    def save_model_version(self, name, version, params: dict, note=""):
+        try:
+            conn = sqlite3.connect(self.db_name)
+            c = conn.cursor()
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            c.execute(
+                """INSERT INTO model_versions
+                   (name, version, created_at, params_json, note)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (name, version, now, json.dumps(params), note)
+            )
+            model_id = c.lastrowid
+            conn.commit()
+            conn.close()
+            return model_id
+        except:
+            return None
+
+    # -----------------------------
+    # settings (active_model_path, ml_threshold 등)
+    # -----------------------------
+    def get_setting(self, key, default=None):
+        try:
+            conn = sqlite3.connect(self.db_name)
+            cur = conn.cursor()
+            cur.execute("SELECT value FROM settings WHERE key = ?", (key,))
+            row = cur.fetchone()
+            conn.close()
+            return row[0] if row else default
+        except:
+            return default
+
+    def set_setting(self, key, value):
+        try:
+            conn = sqlite3.connect(self.db_name)
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO settings (key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """, (key, str(value)))
+            conn.commit()
+            conn.close()
+        except:
+            pass
+
+    # -----------------------------
+    # 백테스트 결과 저장
+    # -----------------------------
+    def save_backtest(self, model_id, start_date, end_date,
+                      trades, win_rate, avg_profit,
+                      cum_return, max_dd, note=""):
+        try:
+            conn = sqlite3.connect(self.db_name)
+            c = conn.cursor()
+            c.execute(
+                """INSERT INTO backtests
+                   (model_id, start_date, end_date,
+                    trades, win_rate, avg_profit,
+                    cum_return, max_dd, note)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (model_id, start_date, end_date,
+                 trades, win_rate, avg_profit,
+                 cum_return, max_dd, note)
+            )
+            conn.commit()
+            conn.close()
+        except:
+            pass
