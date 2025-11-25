@@ -16,7 +16,7 @@ DB_PATH = "trading.db"
 MODEL_DIR = "models"
 
 # 시퀀스 길이 (build_ml_seq_samples.py / trader.py 와 동일해야 함)
-SEQ_LEN = 60
+SEQ_LEN = 40
 
 
 def load_ml_seq_samples():

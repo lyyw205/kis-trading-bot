@@ -11,7 +11,7 @@ if __name__ == "__main__":
     db = BotDatabase(DB_PATH)
     db.log("📦 OHLCV 과거 데이터 백필 시작")
 
-    fetcher = KisDataFetcher(APP_KEY, APP_SECRET, ACCOUNT_NO, mode="virtual")
+    fetcher = KisDataFetcher(APP_KEY, APP_SECRET, ACCOUNT_NO, mode="real")
 
     # KR/US 모두 5분봉 1개월치 (대략 1600개)
     KR_COUNT = 1600

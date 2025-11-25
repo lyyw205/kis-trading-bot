@@ -55,7 +55,6 @@ if __name__ == "__main__":
     # 3) ML Threshold 로드
     # -----------------------------
     ml_threshold = load_ml_threshold(db)
-    db.log(f"🎯 ML Threshold = {ml_threshold}")
 
     # -----------------------------
     # 4) 트레이더 인스턴스 생성

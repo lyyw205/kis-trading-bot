@@ -25,8 +25,8 @@ class KisDataFetcher:
             self.base_url = "https://openapi.koreainvestment.com:9443"
             self.tr_id_kr_buy = "TTTC0802U"
             self.tr_id_kr_sell = "TTTC0801U"
-            self.tr_id_us_buy = "JTTT1002U" 
-            self.tr_id_us_sell = "JTTT1006U" 
+            self.tr_id_us_buy = "TTTT1002U"  # 미국 매수
+            self.tr_id_us_sell = "TTTT1006U" # 미국 매도
         else:
             self.base_url = "https://openapivts.koreainvestment.com:29443"
             self.tr_id_kr_buy = "VTTC0802U"
@@ -36,6 +36,27 @@ class KisDataFetcher:
             
         self.access_token = None
         self.token_file = "kis_token_cache.json"
+    
+    def _normalize_overseas_exchange(self, exchange: str) -> str:
+        """
+        yfinance/기타 데이터의 EXCD 값을
+        한투 주문 API용 코드로 변환
+        """
+        mapping = {
+            # 나스닥 계열
+            "NAS": "NASD",
+            "NMS": "NASD",
+            "NGM": "NASD",
+            "NCM": "NASD",
+
+            # 뉴욕
+            "NYS": "NYSE",
+
+            # 아멕스
+            "AMS": "AMEX",
+            "ASE": "AMEX",
+        }
+        return mapping.get(exchange, exchange)
 
     # ------------------------
     # 인증 / 공통 요청
@@ -139,19 +160,21 @@ class KisDataFetcher:
         return int(data['output']['ord_psbl_cash'])
     
     def get_us_buyable_cash(self):
-            """
-            해외주식 잔고 조회 (TTTS3018R) - 디버깅용
-            - 국가코드 000(전체)으로 조회하여 모든 통화내역을 출력합니다.
-            """
-            url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-present-balance"
+        """
+        해외주식 주문가능금액 (원화 기준 계산)
+        - 현재 계좌가 전부 원화라면 원화 주문가능금액만 환산해서 해외 매수 가능 금액 계산
+        """
+        # 1. USD 잔고 조회 (없으면 자동으로 0)
+        usd_cash = 0.0
+        try:
             tr_id = "VTTS3018R" if self.mode == "virtual" else "TTTS3018R"
+            url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-present-balance"
             headers = self.get_headers(tr_id)
-            
             params = {
                 "CANO": self.acc_no_prefix,
                 "ACNT_PRDT_CD": self.acc_no_suffix,
                 "WCRC_FRCR_DVSN_CD": "02",
-                "NATN_CD": "000",          # ✅ 000: 전체 국가 (미국 한정 X)
+                "NATN_CD": "840",
                 "TR_MKET_CD": "00",
                 "INQR_DVSN_CD": "00",
                 "OVRS_EXCG_CD": "NASD",
@@ -159,33 +182,30 @@ class KisDataFetcher:
                 "CTX_AREA_FK200": "",
                 "CTX_AREA_NK200": ""
             }
-            
             res = requests.get(url, headers=headers, params=params)
-
-            try:
-                data = res.json()
+            data = res.json()
+            if res.status_code == 200 and data.get('rt_cd') == '0':
                 output2 = data.get('output2', [])
-                
-                # 🔍 계좌에 있는 모든 돈 출력 (여기 로그를 꼭 확인해주세요!)
-                print(f"🔍 [계좌 통화 내역] --------------------")
-                found_usd = 0.0
-                
                 for item in output2:
-                    currency = item['crcy_cd']     # 통화코드 (USD, KRW, CNY 등)
-                    amount = item['frcr_dncl_amt_2'] # 잔고 수량
-                    print(f"   👉 통화: {currency} | 잔고: {amount}")
-                    
-                    if currency == 'USD':
-                        found_usd = float(amount)
+                    if item.get('crcy_cd') == 'USD':
+                        usd_cash = float(item['frcr_dncl_amt_2'])
+                        break
+        except Exception as e:
+            print(f"⚠️ USD 조회 실패(무시): {e}")
 
-                print(f"----------------------------------------")
-                
-                return found_usd
+        # 2. 원화 주문가능금액 (→ ord_psbl_cash 기반)
+        krw_cash = self.get_kr_buyable_cash()  # 여기서 147225원이 들어옴
 
-            except Exception as e:
-                print(f"⚠️ 파싱 에러: {e}")
-                return 0.0
-            
+        # 3. 원화를 달러로 환산
+        # 안전하게 높은 환율 사용(1450원)
+        converted_usd = krw_cash / 1450
+
+        total_buying_power = usd_cash + converted_usd
+
+        print(f"💰 [해외 매수 가능] USD(${usd_cash}) + KRW({krw_cash}원→${converted_usd:.2f}) = 총 ${total_buying_power:.2f}")
+
+        return total_buying_power
+
     def get_kr_balance(self):
         url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-balance"
         tr_id = "VTTC8434R" if self.mode == "virtual" else "TTTC8434R"
@@ -284,32 +304,109 @@ class KisDataFetcher:
             "CANO": self.acc_no_prefix,
             "ACNT_PRDT_CD": self.acc_no_suffix,
             "PDNO": symbol,
-            "ORD_DVSN": "01",
+            "ORD_DVSN": "01",   # 시장가
             "ORD_QTY": str(qty),
             "ORD_UNPR": "0"
         }
         res = requests.post(url, headers=headers, data=json.dumps(data))
-        if res.status_code == 200 and res.json().get('rt_cd') == '0':
+
+        try:
+            j = res.json()
+        except Exception as e:
+            print("❌ send_kr_order JSON 파싱 실패:", e, res.text)
+            return False
+
+        if res.status_code == 200 and j.get('rt_cd') == '0':
+            print(f"✅ send_kr_order 성공: {order_type} {symbol} {qty}주")
             return True
+
+        print(
+            "❌ send_kr_order 실패:",
+            f"HTTP={res.status_code}",
+            f"rt_cd={j.get('rt_cd')}",
+            f"msg1={j.get('msg1')}",
+            f"symbol={symbol}",
+            f"qty={qty}",
+            f"order_type={order_type}",
+        )
         return False
 
     def send_us_order(self, exchange, symbol, order_type, qty, price):
+        """
+        해외주식 주문 (현금)
+        - exchange: NASD / NYSE / AMEX ...
+        - order_type: "buy" / "sell" (TR ID 선택용)
+        - 가격/주문 타입은 KIS 샘플과 동일하게: OVRS_ORD_UNPR + ORD_DVSN="00"(지정가)
+        """
         url = f"{self.base_url}/uapi/overseas-stock/v1/trading/order"
         tr_id = self.tr_id_us_buy if order_type == "buy" else self.tr_id_us_sell
+
+        # 1) 거래소 코드 KIS 형식으로 정규화
+        def _normalize_overseas_exchange(excd: str) -> str:
+            mapping = {
+                "NAS": "NASD",
+                "NMS": "NASD",
+                "NGM": "NASD",
+                "NCM": "NASD",
+                "NASD": "NASD",
+
+                "NYS": "NYSE",
+                "NYSE": "NYSE",
+
+                "AMS": "AMEX",
+                "AMEX": "AMEX",
+            }
+            return mapping.get(excd, excd)
+
+        ovrs_excg_cd = _normalize_overseas_exchange(exchange)
+
+        # 2) 가격은 문자열로, 소수 4자리 정도만
+        order_price = round(float(price), 4)
+        order_price_str = f"{order_price:.4f}"
+
+        # 로깅용 실제 주문 금액
+        total_amount = round(order_price * qty, 2)
+
         headers = self.get_headers(tr_id)
-        data = {
+        body = {
             "CANO": self.acc_no_prefix,
             "ACNT_PRDT_CD": self.acc_no_suffix,
-            "OVRS_EXCG_CD": exchange,
-            "PDNO": symbol,
+            "OVRS_EXCG_CD": ovrs_excg_cd,   # ✅ 해외 거래소 코드
+            "PDNO": symbol,                 # ✅ 티커
             "ORD_QTY": str(qty),
-            "ORD_UNPR": str(price),
-            "ORD_DVSN": "00",
-            "ORD_SVR_DVSN_CD": "0"
+            "OVRS_ORD_UNPR": order_price_str,  # ✅ 해외 주문단가
+            "ORD_SVR_DVSN_CD": "0",
+            "ORD_DVSN": "00",                  # ✅ 지정가 (샘플과 동일)
         }
-        res = requests.post(url, headers=headers, data=json.dumps(data))
-        if res.status_code == 200 and res.json().get('rt_cd') == '0':
+
+        res = requests.post(url, headers=headers, data=json.dumps(body))
+
+        try:
+            j = res.json()
+        except Exception as e:
+            print("❌ send_us_order JSON 파싱 실패:", e, res.text)
+            return False
+
+        if res.status_code == 200 and j.get("rt_cd") == "0":
+            print(
+                f"✅ send_us_order 성공: {order_type.upper()} {symbol} {qty}주 "
+                f"@ {order_price_str} (EXCD={ovrs_excg_cd}, amount=${total_amount:.2f})"
+            )
             return True
+
+        print(
+            "❌ send_us_order 실패:",
+            f"HTTP={res.status_code}",
+            f"rt_cd={j.get('rt_cd')}",
+            f"msg_cd={j.get('msg_cd')}",
+            f"msg1={j.get('msg1')}",
+            f"EXCD={ovrs_excg_cd}",
+            f"symbol={symbol}",
+            f"qty={qty}",
+            f"price={order_price_str}",
+            f"amount={total_amount}",
+            f"order_type={order_type}",
+        )
         return False
 
     # ------------------------
@@ -471,10 +568,7 @@ class KisDataFetcher:
     # ========================
     def get_us_minute_ohlcv_5m(self, exchange, symbol, count=200):
         """
-        해외 5분봉 OHLCV 조회
-        - KIS 해외 분봉 TR: v1_해외주식-030 (해외주식분봉조회)
-        - 실전 TR ID: HHDFS76950200
-        - 모의투자 미지원이라 mode='virtual' 이면 빈 DF 반환
+        해외 5분봉 OHLCV 조회 (연속 조회 기능 추가)
         """
         if self.mode == "virtual":
             print("⚠️ 해외 분봉 조회는 모의투자 미지원 → 빈 DataFrame 반환")
@@ -484,79 +578,95 @@ class KisDataFetcher:
             self.auth()
 
         url = f"{self.base_url}/uapi/overseas-price/v1/quotations/inquire-time-itemchartprice"
-        tr_id = "HHDFS76950200"  # 해외분봉조회 TR ID (실전)
+        tr_id = "HHDFS76950200"
 
         headers = self.get_headers(tr_id)
-        params = {
-            "AUTH": "",          # 사용자 권한정보 (일반적으로 빈 문자열)
-            "EXCD": exchange,    # 거래소 코드 (예: 'NASD', 'NYSE')
-            "SYMB": symbol,      # 종목코드 (예: 'AAPL')
-            "NMIN": "5",         # 분갭: 5분봉
-            "PINC": "Y",         # 전일 포함 여부 (Y = 포함)
-            "NEXT": "0",         # 첫 페이지
-            "NREC": str(count),  # 요청 갯수 (최대치는 KIS 문서 참고)
-            "FILL": "0",         # 미체결 채움구분
-            "KEYB": ""           # NEXT KEY BUFF (첫 호출은 빈값)
-        }
+        
+        df_list = []
+        collected_count = 0
+        next_key = ""  # 다음 페이지 키
 
-        res = requests.get(url, headers=headers, params=params)
+        # 목표 개수(count)를 채울 때까지 반복
+        while collected_count < count:
+            params = {
+                "AUTH": "",
+                "EXCD": exchange,
+                "SYMB": symbol,
+                "NMIN": "5",
+                "PINC": "Y",
+                "NEXT": "1" if next_key else "0",  # 첫 요청은 0, 그 뒤론 1
+                "NREC": "120",                     # 한 번에 요청할 개수 (최대 120)
+                "FILL": "0",
+                "KEYB": next_key                   # 다음 페이지 키
+            }
 
-        try:
-            data = res.json()
-        except Exception as e:
-            print("❌ get_us_minute_ohlcv_5m JSON 실패:", e, res.text)
+            time.sleep(0.2) # API 호출 제한 방지 (필수)
+            
+            res = requests.get(url, headers=headers, params=params)
+
+            try:
+                data = res.json()
+            except Exception as e:
+                print("❌ get_us_minute_ohlcv_5m JSON 실패:", e)
+                break
+
+            if res.status_code != 200 or data.get("rt_cd") != "0":
+                print("❌ 실패:", data.get("msg1"), symbol)
+                break
+
+            if "output2" not in data or not data["output2"]:
+                break
+
+            # 1. 이번 페이지 데이터 변환
+            chunk = pd.DataFrame(data["output2"])
+            
+            try:
+                chunk = chunk[[
+                    "kymd", "khms", "open", "high", "low", "last", "evol"
+                ]]
+            except KeyError:
+                break
+
+            chunk["datetime"] = pd.to_datetime(chunk["kymd"] + chunk["khms"])
+            chunk.set_index("datetime", inplace=True)
+            chunk = chunk.rename(columns={
+                "last": "close",
+                "evol": "volume"
+            })
+            chunk = chunk[["open", "high", "low", "close", "volume"]].astype(float)
+            
+            # 2. 리스트에 저장 (최신 데이터가 앞쪽에 오므로 뒤집거나 나중에 정렬)
+            df_list.append(chunk)
+            collected_count += len(chunk)
+
+            # 3. 다음 페이지 키 확인 (없으면 종료)
+            # 해외주식 분봉은 output1에 next 키가 들어오는 경우가 많음
+            output1 = data.get("output1", {})
+            next_key = output1.get("next")  # 혹은 "next_key"
+
+            # API에 따라 next키가 없거나, 더 이상 데이터가 없으면 종료
+            if not next_key or len(chunk) == 0:
+                break
+                
+            # 너무 많이 조회했으면 강제 종료 (무한루프 방지)
+            if collected_count >= count:
+                break
+
+        if not df_list:
             return pd.DataFrame()
 
-        if res.status_code != 200 or data.get("rt_cd") != "0":
-            print(
-                "❌ get_us_minute_ohlcv_5m 실패:",
-                res.status_code, data.get("rt_cd"), data.get("msg1"), exchange, symbol
-            )
-            return pd.DataFrame()
+        # 여러 페이지 합치기
+        df_all = pd.concat(df_list)
+        
+        # 중복 제거 및 시간순 정렬
+        df_all = df_all[~df_all.index.duplicated(keep='first')]
+        df_all = df_all.sort_index()
 
-        # output2 안에 캔들 리스트
-        if "output2" not in data or not data["output2"]:
-            print("❌ get_us_minute_ohlcv_5m output2 비어있음:", exchange, symbol)
-            return pd.DataFrame()
+        # 요청한 개수만큼 자르기 (최신순으로 뒤에서부터)
+        if len(df_all) > count:
+            df_all = df_all.iloc[-count:]
 
-        df = pd.DataFrame(data["output2"])
-
-        # 문서 기준 컬럼:
-        # tymd, xymd, xhms, kymd, khms, open, high, low, last, evol, eamt
-        try:
-            df = df[[
-                "kymd",   # 한국기준일자
-                "khms",   # 한국기준시간
-                "open",
-                "high",
-                "low",
-                "last",
-                "evol",
-            ]]
-        except KeyError:
-            print("⚠️ get_us_minute_ohlcv_5m 컬럼 매핑 실패, 실제 컬럼:", df.columns.tolist())
-            return pd.DataFrame()
-
-        # 한국 기준 일자/시간을 하나의 datetime 으로 묶어서 index 로 사용
-        df["datetime"] = pd.to_datetime(df["kymd"] + df["khms"])
-        df.set_index("datetime", inplace=True)
-
-        df = df.rename(columns={
-            "open": "open",
-            "high": "high",
-            "low": "low",
-            "last": "close",
-            "evol": "volume",
-        })
-
-        df = df[["open", "high", "low", "close", "volume"]].astype(float)
-
-        # 시간 순으로 정렬 + 필요 개수만 사용
-        df = df.sort_index()
-        if len(df) > count:
-            df = df.iloc[-count:]
-
-        return df
+        return df_all
 
 
     def get_ohlcv(self, region, symbol, exchange=None, interval="5m", count=200):
@@ -589,7 +699,7 @@ class KisDataFetcher:
         params = {
             "FID_COND_MRKT_DIV_CODE": "J",
             "FID_INPUT_ISCD": symbol,
-            "FID_INPUT_DATE_1": (datetime.now() - timedelta(days=100)).strftime("%Y%m%d"),
+            "FID_INPUT_DATE_1": (datetime.now() - timedelta(days=200)).strftime("%Y%m%d"),
             "FID_INPUT_DATE_2": datetime.now().strftime("%Y%m%d"),
             "FID_PERIOD_DIV_CODE": "D",
             "FID_ORG_ADJ_PRC": "1"
@@ -620,24 +730,43 @@ class KisDataFetcher:
         return df.astype(float).sort_index()
 
     def get_overseas_daily_ohlcv(self, exchange, symbol):
-        if not self.access_token:
-            self.auth()
-        url = f"{self.base_url}/uapi/overseas-price/v1/quotations/dailyprice"
-        headers = self.get_headers("HHDFS76240000")
-        params = {
-            "AUTH": "",
-            "EXCD": exchange,
-            "SYMB": symbol,
-            "GUBN": "0",
-            "BYMD": datetime.now().strftime("%Y%m%d"),
-            "MODP": "1"
-        }
-        res = requests.get(url, headers=headers, params=params)
-        if res.status_code == 200 and res.json().get('rt_cd') == '0':
-            df = pd.DataFrame(res.json()['output2'])
-            df = df[['xymd', 'open', 'high', 'low', 'clos', 'tvol']]
-            df.columns = ['date', 'open', 'high', 'low', 'close', 'volume']
-            df['date'] = pd.to_datetime(df['date'])
-            df.set_index('date', inplace=True)
-            return df.astype(float).sort_index()
-        return pd.DataFrame()
+            """
+            해외 주식 일봉 차트 조회 (기간 지정 가능 TR 사용)
+            TR ID: HHDFS76500200 (해외주식 종목/지수/환율 기간별 시세)
+            """
+            if not self.access_token:
+                self.auth()
+                
+            url = f"{self.base_url}/uapi/overseas-price/v1/quotations/dailyprice"
+            
+            headers = self.get_headers("HHDFS76240000")
+            params = {
+                "AUTH": "",
+                "EXCD": exchange,
+                "SYMB": symbol,
+                "GUBN": "0", # 0:일, 1:주, 2:월
+                "BYMD": datetime.now().strftime("%Y%m%d"), # 기준일
+                "MODP": "1"  # 0:미수정, 1:수정주가
+            }
+            
+            res = requests.get(url, headers=headers, params=params)
+            
+            if res.status_code == 200 and res.json().get('rt_cd') == '0':
+                output2 = res.json().get('output2', [])
+                if not output2:
+                    return pd.DataFrame()
+                    
+                df = pd.DataFrame(output2)
+                # API가 최신순으로 줌. 100개 들어오는지 확인
+                
+                df = df[['xymd', 'open', 'high', 'low', 'clos', 'tvol']]
+                df.columns = ['date', 'open', 'high', 'low', 'close', 'volume']
+                df['date'] = pd.to_datetime(df['date'])
+                df.set_index('date', inplace=True)
+                
+                # 오름차순 정렬 (과거 -> 현재)
+                df = df.astype(float).sort_index()
+                
+                return df
+                
+            return pd.DataFrame()
