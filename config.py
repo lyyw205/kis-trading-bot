@@ -7,8 +7,27 @@ ACCOUNT_NO = "43522038-01"  # 예: "12345678-01"
 MODE = "real"  # or "virtual"
 
 TARGET_STOCKS = [
-  {"region": "US", "symbol": "TSLA", "excd": "NAS"},
-  {"region": "US", "symbol": "AAPL", "excd": "NAS"},
+    {"region": "US", "symbol": "IONQ", "excd": "NYS"},
+    {"region": "US", "symbol": "BITF", "excd": "NAS"},
+    {"region": "US", "symbol": "HIMS", "excd": "NYS"},
+    {"region": "US", "symbol": "BMNR", "excd": "AMS"},
+    {"region": "US", "symbol": "QUBT", "excd": "NAS"},
+    {"region": "US", "symbol": "RKLB", "excd": "NAS"},
+    {"region": "US", "symbol": "RR", "excd": "NAS"},
+    {"region": "US", "symbol": "UUUU", "excd": "AMS"},
+    {"region": "US", "symbol": "IRBT", "excd": "NAS"},
+    {"region": "US", "symbol": "QSI", "excd": "NAS"},
+    {"region": "US", "symbol": "REKR", "excd": "NAS"},
+    {"region": "US", "symbol": "DVLT", "excd": "NAS"},
+    {"region": "US", "symbol": "ACHR", "excd": "NYS"},
+    {"region": "US", "symbol": "JOBY", "excd": "NYS"},
+    {"region": "US", "symbol": "RGTI", "excd": "NAS"},
+    {"region": "US", "symbol": "BURU", "excd": "AMS"},
+    {"region": "US", "symbol": "PLUG", "excd": "NAS"},
+    {"region": "US", "symbol": "IREN", "excd": "NAS"},
+    {"region": "US", "symbol": "ABVE", "excd": "NAS"},
+    {"region": "US", "symbol": "RZLV", "excd": "NAS"},
+    {"region": "US", "symbol": "LAES", "excd": "NAS"}
 ]
 
 AI_PARAMS = {
