@@ -22,7 +22,7 @@ DB_PATH = "trading.db"
 MODEL_DIR = "models"
 BASE_MODEL_NAME = "seq_model"
 
-SEQ_LEN = 60   # 시퀀스 길이 (trainer / trader와 동일하게 유지)
+SEQ_LEN = 30   # 시퀀스 길이 (trainer / trader와 동일하게 유지)
 TP_PCT = 0.03  # +3% 익절
 SL_PCT = -0.04 # -4% 손절
 

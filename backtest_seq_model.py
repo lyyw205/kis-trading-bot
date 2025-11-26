@@ -14,7 +14,7 @@ DB_PATH = "trading.db"
 MODEL_DEFAULT_PATH = "models/seq_model_latest.pkl"
 
 # === 전략 / 피처 설정 (train_seq_model.py / build_ml_seq_samples.py 와 맞추기) ===
-SEQ_LEN = 60          # 과거 캔들 개수
+SEQ_LEN = 30          # 과거 캔들 개수
 FUTURE_BARS_KR = 12   # KR: 5m * 12 = 약 1시간
 FUTURE_BARS_US = 5    # US: 1d * 5 = 약 5일
 TP_PCT = 0.03         # +3% 익절

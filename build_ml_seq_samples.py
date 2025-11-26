@@ -10,8 +10,8 @@ from config import TARGET_STOCKS
 DB_PATH = "trading.db"
 
 # 시퀀스 길이 / 미래 구간 / TP·SL 기준
-SEQ_LEN = 60          # 과거 60 캔들 사용
-FUTURE_BARS_KR = 12   # 3분봉 기준 약 36분 (필요하면 조절 가능)
+SEQ_LEN = 30          # 과거 60 캔들 사용
+FUTURE_BARS_KR = 60   # 3분봉 기준 약 36분 (필요하면 조절 가능)
 FUTURE_BARS_US = 5    # 일봉 기준 5일
 TP_PCT = 0.03         # +3% 익절
 SL_PCT = -0.04        # -4% 손절

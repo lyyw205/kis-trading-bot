@@ -5,7 +5,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
-SEQ_LEN = 40   # 시퀀스 길이 (train_seq_model.py와 동일)
+SEQ_LEN = 30   # 시퀀스 길이 (train_seq_model.py와 동일)
 
 
 def build_feature_from_seq(df_seq):
