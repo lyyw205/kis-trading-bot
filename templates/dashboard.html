@@ -126,6 +126,211 @@
         grid-template-columns: minmax(0, 1fr);
       }
     }
+
+    .suggest-list {
+      margin: 8px 0 0;
+      padding-left: 18px;
+      font-size: 13px;
+      line-height: 1.5;
+      color: #d4d8f0;
+    }
+    .suggest-list li {
+      margin-bottom: 4px;
+    }
+    .universe-panel {
+      margin-top: 32px;
+    }
+
+    .universe-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 24px;
+      margin-bottom: 12px;
+    }
+
+    .universe-header h2 {
+      margin: 0;
+      font-size: 1.25rem;
+    }
+
+    .universe-updated {
+      margin: 4px 0 0;
+      font-size: 0.85rem;
+      color: #9ca3af;
+    }
+
+    .universe-updated span {
+      color: #e5e7eb;
+    }
+
+    /* 상단 요약 카드들 */
+    .universe-summary {
+      display: flex;
+      gap: 12px;
+    }
+
+    .universe-summary-item {
+      padding: 8px 12px;
+      border-radius: 10px;
+      background: rgba(31, 41, 55, 0.9); /* 진한 회색 카드 */
+      border: 1px solid rgba(55, 65, 81, 0.9);
+      min-width: 110px;
+    }
+
+    .universe-summary-item .label {
+      display: block;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #9ca3af;
+      margin-bottom: 2px;
+    }
+
+    .universe-summary-item .value {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: #f9fafb;
+    }
+
+    /* 테이블 래퍼: 높이 제한 + 스크롤 + sticky header */
+    .universe-table-wrapper {
+      margin-top: 8px;
+      max-height: 420px;
+      overflow-y: auto;
+      border-radius: 10px;
+      border: 1px solid rgba(55, 65, 81, 0.9);
+      background: #020617;
+    }
+
+    /* 실제 테이블 스타일 */
+    .universe-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+
+    .universe-table thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #030712;
+      padding: 8px 10px;
+      text-align: left;
+      font-weight: 600;
+      color: #9ca3af;
+      border-bottom: 1px solid #111827;
+    }
+
+    .universe-table tbody td {
+      padding: 6px 10px;
+      border-bottom: 1px solid #0f172a;
+      color: #e5e7eb;
+      white-space: nowrap;
+    }
+
+    .universe-table tbody tr:nth-child(even) {
+      background: rgba(15, 23, 42, 0.7);
+    }
+
+    .universe-table tbody tr:hover {
+      background: rgba(30, 64, 175, 0.35);
+    }
+
+    .universe-table .text-right {
+      text-align: right;
+    }
+
+    /* days 배지 색상 */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 32px;
+      padding: 2px 6px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
+    .badge-good {
+      background: rgba(22, 163, 74, 0.18);  /* 초록 */
+      color: #4ade80;
+    }
+
+    .badge-mid {
+      background: rgba(234, 179, 8, 0.16);  /* 노랑 */
+      color: #facc15;
+    }
+
+    .badge-bad {
+      background: rgba(220, 38, 38, 0.16);  /* 빨강 */
+      color: #f87171;
+    }
+
+    /* 실패 리스트 */
+    .universe-failures {
+      margin-top: 18px;
+      padding-top: 10px;
+      border-top: 1px dashed #374151;
+    }
+
+    .universe-failures h3 {
+      font-size: 0.95rem;
+      margin: 0 0 6px;
+    }
+
+    .universe-failures ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      font-size: 0.8rem;
+      color: #9ca3af;
+    }
+
+    .universe-failures li {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 4px 0;
+    }
+
+    .universe-failures .fail-time {
+      color: #6b7280;
+    }
+
+    .universe-failures .fail-tag {
+      font-weight: 600;
+      color: #e5e7eb;
+    }
+
+    .universe-failures .fail-type {
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: rgba(248, 113, 113, 0.16);
+      color: #f97373;
+      font-size: 0.7rem;
+    }
+
+    .universe-failures .fail-msg {
+      color: #9ca3af;
+    }
+
+    /* 작은 화면에서 정렬 깨지지 않게 */
+    @media (max-width: 768px) {
+      .universe-header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .universe-summary {
+        width: 100%;
+        flex-wrap: wrap;
+      }
+      .universe-summary-item {
+        flex: 1 1 30%;
+      }
+    }
+
   </style>
 </head>
 <body>
@@ -155,6 +360,24 @@
         <div class="summary-item-value {% if summary.cum_return_pct >= 0 %}pill-positive{% else %}pill-negative{% endif %}">
           {{ "%.2f"|format(summary.cum_return_pct) }}
         </div>
+      </div>
+    </div>
+
+        <!-- 오늘의 ML 학습 요약 & 개선안 -->
+    <div class="section">
+      <div class="card">
+        <h2>🤖 오늘의 ML 학습 요약 & 개선 제안</h2>
+        {% if suggestions and suggestions|length > 0 %}
+          <ul class="suggest-list">
+            {% for s in suggestions %}
+              <li>{{ s }}</li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p style="font-size:13px; color:#9da4c2; margin-top:6px;">
+            오늘은 아직 분석할 신호가 충분히 없습니다. 장 마감 후 다시 확인해 주세요.
+          </p>
+        {% endif %}
       </div>
     </div>
 
@@ -281,7 +504,6 @@
           </table>
         </div>
       </div>
-
       <!-- 실행 로그 -->
       <div class="card">
         <h2>📝 실행 로그 (최근 200개)</h2>
@@ -308,68 +530,172 @@
         </div>
       </div>
     </div>
-  </div>
-  <!-- ============================
-        4. 모델 버전 & 백테스트 섹션
-    ============================= -->
-    <h2 style="margin-top:40px;">ML 모델 버전 히스토리</h2>
-    <table class="table table-sm table-striped">
-    <thead>
-        <tr>
-        <th>ID</th>
-        <th>이름</th>
-        <th>버전</th>
-        <th>생성일시</th>
-        <th>요약</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for m in model_versions %}
-        <tr>
-        <td>{{ m.id }}</td>
-        <td>{{ m.name }}</td>
-        <td>{{ m.version }}</td>
-        <td>{{ m.created_at }}</td>
-        <td>{{ m.note }}</td>
-        </tr>
-        {% endfor %}
-    </tbody>
-    </table>
+    <section class="card section">
+      <h2>ML 모니터링</h2>
+      <div style="display:flex; gap:24px; flex-wrap:wrap;">
+        <div style="flex:1; min-width:300px;">
+          <h3>ML 확률 분포 (히스토그램)</h3>
+          <canvas id="mlHistChart"></canvas>
+        </div>
 
-    <h2 style="margin-top:40px;">백테스트 결과 (최근 50개)</h2>
-    <table class="table table-sm table-bordered">
-    <thead>
-        <tr>
-        <th>ID</th>
-        <th>모델(ID / 버전)</th>
-        <th>기간</th>
-        <th>트레이드 수</th>
-        <th>승률(%)</th>
-        <th>평균 수익률(%)</th>
-        <th>누적 수익률(%)</th>
-        <th>최대낙폭(%)</th>
-        <th>메모</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for b in backtests %}
-        <tr>
-        <td>{{ b.id }}</td>
-        <td>
-            {{ b.model_id }} /
-            {{ b.model_name }} {{ b.model_version }}
-        </td>
-        <td>{{ b.start_date }} ~ {{ b.end_date }}</td>
-        <td>{{ b.trades }}</td>
-        <td>{{ "%.2f"|format(b.win_rate or 0) }}</td>
-        <td>{{ "%.2f"|format(b.avg_profit or 0) }}</td>
-        <td>{{ "%.2f"|format(b.cum_return or 0) }}</td>
-        <td>{{ "%.2f"|format(b.max_dd or 0) }}</td>
-        <td>{{ b.note }}</td>
-        </tr>
-        {% endfor %}
-    </tbody>
-    </table>
+        <div style="flex:2; min-width:300px;">
+          <h3>시간대별 ML 확률 & 진입 허용</h3>
+          <canvas id="mlTimeChart"></canvas>
+        </div>
+      </div>
+    </section>
+    <section class="universe-panel">
+      <div class="universe-header">
+        <div>
+          <h2>UNIVERSE OHLCV Coverage</h2>
+          <p class="universe-updated">
+            Last updated:
+            <span>{{ last_universe_backfill or '—' }}</span>
+          </p>
+        </div>
+
+        <!-- 요약 카드 3개 정도 -->
+        <div class="universe-summary">
+          <div class="universe-summary-item">
+            <span class="label">Symbols</span>
+            <span class="value">
+              {{ num_universe_symbols }}
+            </span>
+          </div>
+          <div class="universe-summary-item">
+            <span class="label">Total candles</span>
+            <span class="value">
+              {{ total_universe_candles }}
+            </span>
+          </div>
+          <div class="universe-summary-item">
+            <span class="label">Max days covered</span>
+            <span class="value">
+              {{ max_days_covered }}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div class="universe-table-wrapper">
+        <table class="universe-table">
+          <thead>
+            <tr>
+              <th>Region</th>
+              <th>Symbol</th>
+              <th>Interval</th>
+              <th class="text-right">Candles</th>
+              <th class="text-right">Days</th>
+              <th>Start</th>
+              <th>End</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in universe_cov %}
+              {% set days = row.days_covered|int %}
+              <tr>
+                <td>{{ row.region }}</td>
+                <td><code>{{ row.symbol }}</code></td>
+                <td>{{ row.interval }}</td>
+                <td class="text-right">{{ row.candles }}</td>
+                <td class="text-right">
+                  {% if days >= 20 %}
+                    <span class="badge badge-good">{{ days }}</span>
+                  {% elif days >= 5 %}
+                    <span class="badge badge-mid">{{ days }}</span>
+                  {% else %}
+                    <span class="badge badge-bad">{{ days }}</span>
+                  {% endif %}
+                </td>
+                <td>{{ row.first_dt }}</td>
+                <td>{{ row.last_dt }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 실패 내역이 있을 때만 표시 -->
+      {% if universe_failures %}
+        <div class="universe-failures">
+          <h3>Recent backfill issues</h3>
+          <ul>
+            {% for f in universe_failures %}
+              <li>
+                <span class="fail-time">[{{ f.created_at }}]</span>
+                <span class="fail-tag">{{ f.region }} {{ f.symbol }}</span>
+                <span class="fail-type">{{ f.error_type }}</span>
+                <span class="fail-msg">{{ f.error_message }}</span>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+    </section>
+    <div>
+        <!-- ============================
+          4. 모델 버전 & 백테스트 섹션
+      ============================= -->
+      <h2 style="margin-top:40px;">ML 모델 버전 히스토리</h2>
+      <table class="table table-sm table-striped">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>생성일시</th>
+            <th>모델 경로</th>
+            <th>학습 샘플 수</th>
+            <th>검증 정확도(%)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for m in model_versions %}
+          <tr>
+            <td>{{ m.id }}</td>
+            <td>{{ m.created_at }}</td>
+            <td>{{ m.path }}</td>
+            <td>{{ m.n_samples }}</td>
+            <td>{{ "%.2f"|format((m.val_accuracy or 0) * 100) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <h2 style="margin-top:40px;">백테스트 결과 (최근 50개)</h2>
+      <table class="table table-sm table-bordered">
+      <thead>
+          <tr>
+          <th>ID</th>
+          <th>모델(ID / 버전)</th>
+          <th>기간</th>
+          <th>트레이드 수</th>
+          <th>승률(%)</th>
+          <th>평균 수익률(%)</th>
+          <th>누적 수익률(%)</th>
+          <th>최대낙폭(%)</th>
+          <th>메모</th>
+          </tr>
+      </thead>
+      <tbody>
+          {% for b in backtests %}
+          <tr>
+          <td>{{ b.id }}</td>
+          <td>
+              {{ b.model_id }} /
+              {{ b.model_name }} {{ b.model_version }}
+          </td>
+          <td>{{ b.start_date }} ~ {{ b.end_date }}</td>
+          <td>{{ b.trades }}</td>
+          <td>{{ "%.2f"|format(b.win_rate or 0) }}</td>
+          <td>{{ "%.2f"|format(b.avg_profit or 0) }}</td>
+          <td>{{ "%.2f"|format(b.cum_return or 0) }}</td>
+          <td>{{ "%.2f"|format(b.max_dd or 0) }}</td>
+          <td>{{ b.note }}</td>
+          </tr>
+          {% endfor %}
+      </tbody>
+      </table>
+    </div>
+  </div>
 
   <!-- 차트 스크립트 -->
   <script>
@@ -437,6 +763,80 @@
         }
       });
     })();
+
+    const mlHistLabels = JSON.parse('{{ ml_hist_labels | tojson | safe }}');
+    const mlHistCounts = JSON.parse('{{ ml_hist_counts | tojson | safe }}');
+    const mlTimeSeries = JSON.parse('{{ ml_time_series | tojson | safe }}');
+
+    // 1) 히스토그램 차트
+    if (mlHistLabels.length > 0) {
+      const ctxHist = document.getElementById('mlHistChart').getContext('2d');
+      new Chart(ctxHist, {
+        type: 'bar',
+        data: {
+          labels: mlHistLabels,
+          datasets: [{
+            label: '신호 수',
+            data: mlHistCounts,
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: {
+            legend: { display: false },
+            title: { display: false }
+          },
+          scales: {
+            x: { title: { display: true, text: 'ml_proba 구간' } },
+            y: { title: { display: true, text: 'count' }, beginAtZero: true }
+          }
+        }
+      });
+    }
+
+    // 2) 시간 시계열 차트
+    if (mlTimeSeries.length > 0) {
+      const times = mlTimeSeries.map(d => d.time);
+      const probas = mlTimeSeries.map(d => d.proba);
+      const allowedPoints = mlTimeSeries
+        .map((d, idx) => d.entry_allowed ? { x: times[idx], y: probas[idx] } : null)
+        .filter(d => d !== null);
+
+      const ctxTime = document.getElementById('mlTimeChart').getContext('2d');
+      new Chart(ctxTime, {
+        type: 'line',
+        data: {
+          labels: times,
+          datasets: [
+            {
+              label: 'ml_proba',
+              data: probas,
+              tension: 0.2,
+              pointRadius: 2,
+            },
+            {
+              label: 'entry_allowed=1',
+              type: 'scatter',
+              data: allowedPoints,
+              pointRadius: 5,
+              pointStyle: 'circle',
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          interaction: { mode: 'nearest', intersect: false },
+          scales: {
+            x: { title: { display: true, text: 'time' } },
+            y: {
+              title: { display: true, text: 'ml_proba' },
+              min: 0,
+              max: 1
+            }
+          }
+        }
+      });
+    }
   </script>
 </body>
 </html>

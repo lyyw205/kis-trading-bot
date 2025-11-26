@@ -1,4 +1,10 @@
 # prepare_dataset.py
+# 완전 심플한 데이터 로딩 유틸
+# signals 테이블 전체를 pandas DataFrame으로 읽어오는 함수
+# ML 학습용 feature 만들어내기 등의 작업을 Jupyter / Colab에서 하기에 딱 좋은 형태
+
+# !! ML 모델을 만들기 전에 반드시 필요한 preprocessing 단계를 담당하는 파일 !!
+
 import sqlite3
 import pandas as pd
 
@@ -24,6 +30,3 @@ if __name__ == "__main__":
 
     print("signals:", sig.shape)
     print("trades:", tr.shape)
-
-    # 예시: 신호 이후 3개 트레이드 안에 해당 심볼 매도 발생했는지 라벨 만들기…
-    # 여기는 나중에 전략/라벨링 방식 정해지면 구체적으로 채우면 됨.

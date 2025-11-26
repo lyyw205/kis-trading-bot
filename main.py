@@ -1,28 +1,25 @@
 # main.py
 import time
 import joblib
-
 from db import BotDatabase
 from kis_api import KisDataFetcher
 from trader import GlobalRealTimeTrader
 from config import APP_KEY, APP_SECRET, ACCOUNT_NO, MODE, TARGET_STOCKS, AI_PARAMS
+from ml_model import load_model
+
 
 
 def load_active_model(db: BotDatabase):
-    """settings.active_model_path를 읽어 모델을 로딩."""
+    """settings.active_model_path를 읽어 ML 모델 로딩 (ml_model.load_model 사용)."""
     model_path = db.get_setting("active_model_path", "")
 
     if not model_path:
         db.log("🤖 ML 모델 없음 → 룰 기반으로만 동작합니다.")
         return None
 
-    try:
-        model = joblib.load(model_path)
-        db.log(f"🤖 활성 모델 로드 완료: {model_path}")
-        return model
-    except Exception as e:
-        db.log(f"⚠️ 모델 로드 실패: {e} → 룰 기반으로 동작")
-        return None
+    # ⭐ 중앙화된 모델 로딩 함수 사용
+    model = load_model(model_path, db)
+    return model   # load_model()이 None 또는 모델 객체를 반환함
 
 
 def load_ml_threshold(db: BotDatabase):
@@ -44,7 +41,7 @@ if __name__ == "__main__":
     # -----------------------------
     # 1) KIS API 연결
     # -----------------------------
-    fetcher = KisDataFetcher(APP_KEY, APP_SECRET, ACCOUNT_NO, mode=MODE)
+    fetcher = KisDataFetcher(APP_KEY, APP_SECRET, ACCOUNT_NO, mode=MODE, logger=db.log)
 
     # -----------------------------
     # 2) ML 모델 로드

@@ -11,20 +11,36 @@ def get_kis_format_list(symbols):
     # KIS API에서 사용하는 거래소 코드 매핑
     # 야후의 거래소 코드를 KIS 포맷(NAS, NYS, AMS)으로 변환
     def map_exchange(yf_exch):
-        yf_exch = yf_exch.upper()
-        
-        # 나스닥 계열
-        if "NASDAQ" in yf_exch or yf_exch in ["NMS", "NGM", "NCM", "PNK"]:
+        """
+        야후 파이낸스 exchange 문자열 → KIS EXCD(NAS/NYS/AMS)
+        OTC / PINK / OTCQX / OTCQB 등은 None 반환
+        """
+        if not yf_exch:
+            return None
+
+        name = yf_exch.upper().strip()
+
+        # 1) OTC / PINK 계열 먼저 컷
+        otc_keywords = ["OTC", "PINK", "OTCQB", "OTCQX", "OTCPK", "PNK", "OBB"]
+        if any(k in name for k in otc_keywords):
+            print(f"⚠️ OTC 감지 → excd=None 처리: {yf_exch}")
+            return None
+
+        # 2) 나스닥 계열
+        if "NASDAQ" in name or name in ["NMS", "NGM", "NCM"]:
             return "NAS"
-        # 뉴욕 계열
-        elif "NYSE" in yf_exch or "NEW YORK" in yf_exch or yf_exch in ["NYQ", "NYS"]:
+
+        # 3) 뉴욕 계열
+        if "NYSE" in name or "NEW YORK" in name or name in ["NYQ", "NYS"]:
             return "NYS"
-        # 아멕스 계열
-        elif "AMEX" in yf_exch or "AMERICAN" in yf_exch or yf_exch in ["ASE", "AMS"]:
+
+        # 4) 아멕스 계열
+        if "AMEX" in name or "AMERICAN" in name or name in ["ASE", "AMS"]:
             return "AMS"
-        # 기타 (OTC 등) -> 일단 나스닥으로 간주하거나 에러 처리
-        else:
-            return "NAS" # 기본값
+
+        # 5) 그 외 애매한 건 None
+        print(f"⚠️ 알 수 없는 거래소 코드 → excd=None 처리: {yf_exch}")
+        return None
 
     for symbol in symbols:
         try:

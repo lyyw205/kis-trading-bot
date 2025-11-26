@@ -1,3 +1,34 @@
+#프로젝트 전체에서 사용하는 모든 핵심 테이블을 생성함:
+
+# trades
+# → 실시간 체결 기록 저장
+# → 대시보드 성과 / EQ curve에 직접 연결
+
+# logs
+# → 모든 실행 로그 저장
+# → 대시보드 로그 패널에 표시됨
+
+# signals
+# → 룰 기반 + ML 기반 진입 신호 저장
+# → 개선안(suggest_improvements)에서 사용됨
+
+# ohlcv_data
+# → UNIVERSE 과거데이터 저장
+# → build_ohlcv_history.py에서 입력
+# → 백테스트 / ML 샘플 생성의 핵심 원천 데이터
+
+# models / model_versions
+# → ML 모델 버전 관리
+# → active model, 실험 모델 비교 등에서 사용
+
+# backtests
+# → 자동·수동 백테스트 결과 저장
+# → 대시보드 Backtest Summary에 표시
+
+# settings
+# → active_model_path, ml_threshold 등 저장
+# → trader.py → 모델 실행 시 사용
+
 import sqlite3
 from datetime import datetime
 import json
@@ -65,7 +96,7 @@ class BotDatabase:
             )
         """)
 
-        # 5) 간단한 모델 버전 기록 (train_seq_model.py에서 사용)
+        # 5) 간단한 모델 버전 기록 (구버전 호환용)
         c.execute("""
             CREATE TABLE IF NOT EXISTS models (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,7 +107,7 @@ class BotDatabase:
             )
         """)
 
-        # 6) 상세 모델 메타 정보 (옵션: 수동으로 쓸 때 사용)
+        # 6) 상세 모델 메타 정보
         c.execute('''CREATE TABLE IF NOT EXISTS model_versions
                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
                       name TEXT,
@@ -104,6 +135,20 @@ class BotDatabase:
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT
+            )
+        """)
+
+        # 9) Universe 백필 실패 기록 테이블 (대시보드에서 사용)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS universe_backfill_failures (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                region TEXT,
+                symbol TEXT,
+                excd TEXT,
+                interval TEXT,
+                error_type TEXT,
+                error_message TEXT,
+                created_at TEXT
             )
         """)
 
@@ -171,8 +216,12 @@ class BotDatabase:
             conn.commit()
             conn.close()
             print(f"[{now}] {message}")
-        except:
-            pass
+        except Exception as e:
+            # 로그조차 실패하면 어쩔 수 없이 print만 시도
+            try:
+                print(f"[LOG-FAIL] {message} (원인: {e})")
+            except:
+                pass
 
     # -----------------------------
     # 트레이드 / 시그널
@@ -198,8 +247,8 @@ class BotDatabase:
             )
             conn.commit()
             conn.close()
-        except:
-            pass
+        except Exception as e:
+            self.log(f"⚠️ save_trade 실패: {e}")
 
     def save_signal(self, *, region, symbol, price,
                     at_support, is_bullish, price_up,
@@ -232,8 +281,37 @@ class BotDatabase:
             conn.commit()
             conn.close()
             return signal_id
-        except Exception:
+        except Exception as e:
+            self.log(f"⚠️ save_signal 실패: {e}")
             return None
+
+    # -----------------------------
+    # Universe 백필 실패 기록 헬퍼
+    # -----------------------------
+    def log_universe_backfill_failure(self, region, symbol, excd, interval,
+                                      error_type, error_message):
+        """
+        build_ohlcv_history.py 등에서 백필 실패 시 호출.
+        대시보드 universe_failures 패널에서 보여줄 데이터.
+        """
+        try:
+            conn = sqlite3.connect(self.db_name)
+            c = conn.cursor()
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            c.execute(
+                """INSERT INTO universe_backfill_failures
+                   (region, symbol, excd, interval, error_type, error_message, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (region, symbol, excd, interval, error_type, error_message, now)
+            )
+            conn.commit()
+            conn.close()
+            self.log(
+                f"⚠️ [UNIVERSE-FAIL] {region} {symbol} ({interval}, {excd}) "
+                f"{error_type}: {error_message}"
+            )
+        except Exception as e:
+            self.log(f"⚠️ universe_backfill_failures 기록 실패: {e}")
 
     # -----------------------------
     # 모델 버전(상세 메타) 저장
@@ -253,7 +331,8 @@ class BotDatabase:
             conn.commit()
             conn.close()
             return model_id
-        except:
+        except Exception as e:
+            self.log(f"⚠️ save_model_version 실패: {e}")
             return None
 
     # -----------------------------
@@ -267,7 +346,8 @@ class BotDatabase:
             row = cur.fetchone()
             conn.close()
             return row[0] if row else default
-        except:
+        except Exception as e:
+            self.log(f"⚠️ get_setting 실패({key}): {e}")
             return default
 
     def set_setting(self, key, value):
@@ -281,8 +361,8 @@ class BotDatabase:
             """, (key, str(value)))
             conn.commit()
             conn.close()
-        except:
-            pass
+        except Exception as e:
+            self.log(f"⚠️ set_setting 실패({key}): {e}")
 
     # -----------------------------
     # 백테스트 결과 저장
@@ -305,5 +385,5 @@ class BotDatabase:
             )
             conn.commit()
             conn.close()
-        except:
-            pass
+        except Exception as e:
+            self.log(f"⚠️ save_backtest 실패: {e}")

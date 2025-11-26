@@ -11,6 +11,10 @@ from sklearn.model_selection import train_test_split
 import joblib
 
 from db import BotDatabase
+from config import UNIVERSE_STOCKS
+
+import config
+print(">>> config attributes:", dir(config))
 
 DB_PATH = "trading.db"
 MODEL_DIR = "models"
@@ -110,6 +114,22 @@ if __name__ == "__main__":
     df_samples = df_samples[df_samples["label"].isin([0, 1])].copy()
     if df_samples.empty:
         print("❌ 사용 가능한 라벨(0/1)이 없습니다.")
+        raise SystemExit
+
+    # ✅ 1-1) UNIVERSE_STOCKS 에 포함된 종목만 남기기
+    universe_pairs = {(s["region"], s["symbol"]) for s in UNIVERSE_STOCKS}
+    before_cnt = len(df_samples)
+    df_samples = df_samples[
+        df_samples[["region", "symbol"]]
+        .apply(lambda r: (r["region"], r["symbol"]) in universe_pairs, axis=1)
+    ].copy()
+    after_cnt = len(df_samples)
+
+    print(f"🌌 UNIVERSE 필터 전 샘플 수: {before_cnt}")
+    print(f"🌌 UNIVERSE 필터 후 샘플 수: {after_cnt}")
+
+    if df_samples.empty:
+        print("❌ UNIVERSE_STOCKS에 해당하는 샘플이 없습니다. UNIVERSE 구성을 확인하세요.")
         raise SystemExit
 
     # 2) OHLCV 전체 로드
