@@ -7,12 +7,22 @@ import pandas as pd
 
 SEQ_LEN = 30   # 시퀀스 길이 (train_seq_model.py와 동일)
 
+# -----------------------------------------------------------
+# 헬퍼 함수 (RSI 계산, Feature 생성)
+# -----------------------------------------------------------
+def calculate_rsi(series, period=14):
+    """RSI(상대강도지수) 계산"""
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.fillna(50) # 초기값은 50으로 처리
 
 def build_feature_from_seq(df_seq):
     """
     최근 30개 캔들을 기반으로 feature 생성
-    - close/high/low → 첫 종가 대비 변화율
-    - volume → 평균 대비 정규화
     """
     if len(df_seq) != SEQ_LEN:
         return None
@@ -37,6 +47,9 @@ def build_feature_from_seq(df_seq):
     return feat
 
 
+# -----------------------------------------------------------
+# 트레이더 클래스
+# -----------------------------------------------------------
 class GlobalRealTimeTrader:
     def __init__(self, fetcher, targets, params, db, model=None, ml_threshold=0.55):
         self.fetcher = fetcher
@@ -49,9 +62,9 @@ class GlobalRealTimeTrader:
         self.model = model
         self.ml_threshold = ml_threshold
 
-        # 최소 주문 금액(브로커 요구 조건에 맞춰 조정 가능)
-        self.min_us_order_amount = 0.0    # 예: 30달러 이상만 주문
-        self.min_kr_order_amount = 5000   # 예: 5천원 이상만 주문 (현재는 로직에서 미사용)
+        # 최소 주문 금액 설정
+        self.min_us_order_amount = 0.0    
+        self.min_kr_order_amount = 5000   
 
     def is_market_open(self, region):
         now = datetime.now()
@@ -62,14 +75,14 @@ class GlobalRealTimeTrader:
                 (9 < now.hour < 15) or
                 (now.hour == 15 and now.minute <= 20)
             )
-        else:  # US
+        else:  # US (서머타임 고려 필요 시 별도 로직 추가, 기본값 유지)
             return (
                 (now.hour == 23 and now.minute >= 30) or   # 23:30 ~ 23:59
                 (0 <= now.hour < 6)                        # 00:00 ~ 05:59
             )
 
     # ------------------------------
-    # 매수 집행: ML 상위 → 1차 35% / 2차 50% / 3차 전액
+    # 매수 집행 로직
     # ------------------------------
     def execute_buys(self, candidates, kr_balance, us_balance, cash_krw, cash_usd):
         max_pos = 3
@@ -86,32 +99,26 @@ class GlobalRealTimeTrader:
             f"KRW:{cash_krw}원 / USD:{cash_usd:.2f}$"
         )
 
-        # 슬롯이 없으면 바로 종료
         if remain_slots <= 0:
             self.db.log("⏭️ [슬롯없음] 신규 매수 전부 스킵")
             return
 
-        # 혹시 모를 중복/보유 종목 제거 (안전망 차원)
+        # 중복 제거
         held_symbols = set(kr_balance.keys()) | set(us_balance.keys())
-        filtered = [
-            c for c in candidates
-            if c["symbol"] not in held_symbols
-        ]
+        filtered = [c for c in candidates if c["symbol"] not in held_symbols]
 
         if not filtered:
-            self.db.log("⏭️ [후보없음] 보유 중이 아닌 신규 매수 후보가 없음")
+            self.db.log("⏭️ [후보없음] 신규 매수 대상 없음")
             return
 
-        # ML 점수 높은 순으로 정렬
+        # ML 점수 높은 순 정렬
         filtered.sort(key=lambda x: (x["ml_proba"] or 0), reverse=True)
-
-        # 남은 슬롯 수만큼만 매수 대상 선정
         targets_to_buy = filtered[:remain_slots]
 
         available_krw = cash_krw
         available_usd = cash_usd
-        slots_left = remain_slots      # 포트폴리오 남은 칸
-        success_new = 0                # 이번 run에서 새로 들어간 종목 개수
+        slots_left = remain_slots
+        success_new = 0 
 
         for c in targets_to_buy:
             if slots_left <= 0:
@@ -124,44 +131,29 @@ class GlobalRealTimeTrader:
             ml_proba = c["ml_proba"]
             signal_id = c["signal_id"]
 
-            # 이번 run 기준 몇 번째 신규 진입인지 (0=첫 종목, 1=둘째, 2=셋째)
             buy_index = success_new
 
-            # 1차 / 2차 / 3차 비율 설정
-            # - 1차: 전체 가용금의 30~40% → 중간값 35%
-            # - 2차: 남은 가용금의 40~60% → 중간값 50%
-            # - 3차: 남은 금액 전부
+            # 분할 매수 비율 설정
             if buy_index == 0:
                 min_ratio, max_ratio = 0.30, 0.40
             elif buy_index == 1:
                 min_ratio, max_ratio = 0.40, 0.60
             else:
-                min_ratio, max_ratio = 1.0, 1.0  # 전액
+                min_ratio, max_ratio = 1.0, 1.0
 
-            ratio = (min_ratio + max_ratio) / 2.0  # 구간 중간값 사용
+            ratio = (min_ratio + max_ratio) / 2.0
 
+            # --- KR 매수 ---
             if region == "KR":
                 if available_krw <= 0:
-                    self.db.log(f"⚠️ [KR현금부족] {symbol} 매수 불가 (available_krw=0)")
                     continue
-
-                base_cash = available_krw  # 1차는 전체, 2차/3차는 남은 금액 기준
-                budget = base_cash * ratio
+                
+                budget = available_krw * ratio
                 qty = int(budget / price)
                 amount = qty * price
 
-                self.db.log(
-                    f"🧾 [KR수량계산] {symbol} | "
-                    f"단계:{buy_index+1}차, ratio≈{ratio*100:.1f}% "
-                    f"| base_cash:{base_cash:.0f}원 → budget:{budget:.0f}원 "
-                    f"/ price:{price:.0f}원 → qty:{qty}, amount:{amount:.0f}원"
-                )
-
                 if qty <= 0:
-                    self.db.log(
-                        f"⚠️ [KR금액컷] {symbol}: "
-                        f"예산으로 1주도 못 삼 (budget={budget:.0f}원, price={price:.0f}원)"
-                    )
+                    self.db.log(f"⚠️ [KR금액컷] {symbol} QTY=0 (Budget:{budget:.0f})")
                     continue
 
                 success = self.fetcher.send_kr_order(symbol, "buy", qty)
@@ -170,47 +162,20 @@ class GlobalRealTimeTrader:
                     slots_left -= 1
                     total_held += 1
                     success_new += 1
+                    self.db.save_trade(symbol, "BUY", price, qty, 0, signal_id, ml_proba, True)
+                    self.db.log(f"✅🚀[KR매수] {symbol} {qty}주 | ML:{ml_proba:.3f}")
 
-                    self.db.save_trade(
-                        symbol, "BUY", price, qty,
-                        profit=0,
-                        signal_id=signal_id,
-                        ml_proba=ml_proba,
-                        entry_allowed=True
-                    )
-                    self.db.log(
-                        f"✅🚀[KR매수] {symbol} {qty}주 | "
-                        f"체결가:{price} | ML:{ml_proba:.3f} | "
-                        f"이번run {success_new}번째 신규진입 | 총보유:{total_held}/{max_pos}"
-                    )
-                else:
-                    self.db.log(
-                        f"❌ [KR매수실패] {symbol} {qty}주 | 주문 API 실패 (amount={amount:.0f}원)"
-                    )
-
+            # --- US 매수 ---
             elif region == "US":
                 if available_usd <= 0:
-                    self.db.log(f"⚠️ [US현금부족] {symbol} 매수 불가 (available_usd=0)")
                     continue
 
-                base_cash = available_usd
-                budget = base_cash * ratio
+                budget = available_usd * ratio
                 qty = int(budget / price)
                 amount = qty * price
 
-                self.db.log(
-                    f"🧾 [US수량계산] {symbol} | "
-                    f"단계:{buy_index+1}차, ratio≈{ratio*100:.1f}% "
-                    f"| base_cash:{base_cash:.2f}$ → budget:{budget:.2f}$ "
-                    f"/ price:{price:.2f}$ → qty:{qty}, amount:{amount:.2f}$"
-                )
-
                 if qty <= 0 or amount < self.min_us_order_amount:
-                    self.db.log(
-                        f"⚠️ [US금액컷] {symbol}: "
-                        f"주문금액 ${amount:.2f} < 최소 ${self.min_us_order_amount:.2f} "
-                        f"(qty={qty})"
-                    )
+                    self.db.log(f"⚠️ [US금액컷] {symbol} QTY={qty}, Amt=${amount:.2f}")
                     continue
 
                 success = self.fetcher.send_us_order(excd, symbol, "buy", qty, price)
@@ -219,29 +184,14 @@ class GlobalRealTimeTrader:
                     slots_left -= 1
                     total_held += 1
                     success_new += 1
-
-                    self.db.save_trade(
-                        symbol, "BUY", price, qty,
-                        profit=0,
-                        signal_id=signal_id,
-                        ml_proba=ml_proba,
-                        entry_allowed=True
-                    )
-                    self.db.log(
-                        f"✅🚀[US매수] {symbol} {qty}주 | "
-                        f"체결가:{price} | ML:{ml_proba:.3f} | "
-                        f"이번run {success_new}번째 신규진입 | 총보유:{total_held}/{max_pos}"
-                    )
-                else:
-                    self.db.log(
-                        f"❌ [US매수실패] {symbol} {qty}주 | 주문 API 실패 (amount={amount:.2f}$)"
-                    )
+                    self.db.save_trade(symbol, "BUY", price, qty, 0, signal_id, ml_proba, True)
+                    self.db.log(f"✅🚀[US매수] {symbol} {qty}주 | ML:{ml_proba:.3f}")
 
     # ------------------------------
-    # 메인 루프
+    # 메인 체크 루프 (수정 완료)
     # ------------------------------
     def run_check(self):
-        # 잔고
+        # 1. 잔고 및 현금 조회
         try:
             kr_balance = self.fetcher.get_kr_balance()
             us_balance = self.fetcher.get_us_balance()
@@ -252,85 +202,136 @@ class GlobalRealTimeTrader:
             return
 
         self.db.log(
-            f"💰 [잔고스냅샷] KR보유종목:{len(kr_balance)} / US보유종목:{len(us_balance)} | "
-            f"KRW현금:{cash_krw}원 | USD매수파워:{cash_usd:.2f}$"
+            f"💰 [잔고스냅샷] KR보유:{len(kr_balance)} / US보유:{len(us_balance)} | "
+            f"KRW:{cash_krw}원 | USD:{cash_usd:.2f}$"
         )
 
         entry_candidates = []
         count_checked = 0
         count_skipped = 0
         count_signals = 0
-
-        # ML 점수 기록용 리스트 (심볼, 점수)
         ml_scores = []
 
+        # 2. 종목 스캔 루프
         for t in self.targets:
             region = t["region"]
             symbol = t["symbol"]
             excd = t.get("excd")
 
-            time.sleep(0.2)  # API 부하 조절
+            time.sleep(0.2)  # API 과부하 방지
 
+            # 장 운영 시간 확인
             if not self.is_market_open(region):
-                self.db.log(
-                    f"⏱️ [장외스킵] {region} {symbol} | "
-                    f"현재시간={datetime.now().strftime('%H:%M')} → is_market_open=False"
-                )
+                # 장외 시간 로그는 너무 많으면 지저분하므로 생략 가능
                 count_skipped += 1
                 continue
 
-            # 현재가
+            # 현재가 조회
             if region == "KR":
                 price = self.fetcher.get_kr_current_price(symbol)
-                has_stock = symbol in kr_balance
+                has_stock = (symbol in kr_balance) or (symbol in self.trade_state)
                 my_info = kr_balance.get(symbol)
             else:
                 price = self.fetcher.get_us_current_price(excd, symbol)
-                has_stock = symbol in us_balance
+                has_stock = (symbol in us_balance) or (symbol in self.trade_state)
                 my_info = us_balance.get(symbol)
 
             if not price:
-                # self.db.log(f"🚫 [Skip] {symbol}: 현재가 조회 실패")
                 count_skipped += 1
                 continue
 
-            # 5분봉 조회
+            # 캔들 데이터 조회 (5분봉)
             interval = "5m"
             df = self.fetcher.get_ohlcv(region, symbol, excd, interval=interval, count=120)
 
             if df is None or df.empty:
-                self.db.log(f"🚫 [Skip] {symbol}: 데이터 없음")
+                # self.db.log(f"🚫 [Skip] {symbol}: 데이터 없음")
                 count_skipped += 1
                 continue
 
             if len(df) < SEQ_LEN:
-                self.db.log(f"⚠️ [Skip] {symbol}: 데이터 부족")
+                # self.db.log(f"⚠️ [Skip] {symbol}: 데이터 부족")
                 count_skipped += 1
                 continue
 
+            # 데이터 저장
             try:
                 self.db.save_ohlcv_df(region, symbol, interval, df)
             except Exception:
-                # 저장 에러는 조용히 넘어감
                 pass
 
             count_checked += 1
 
-            # 룰 기반 신호 계산
+            # -----------------------------------------------------------
+            # [전략 로직 수정 구간] - Momentum & Reversal
+            # -----------------------------------------------------------
+            
+            # (1) 보조지표 계산
+            # - Support: 과거 N봉 최저가
             df["support"] = df["low"].rolling(self.params["lookback"]).min()
-            df["at_support"] = df["low"] <= df["support"] * (1 + self.params["band_pct"])
-            df["is_bullish"] = df["close"] > df["open"]
-            df["price_up"] = df["close"] > df["close"].shift(1)
-            last = df.iloc[-1]
+            
+            # - MA (이동평균선)
+            df["ma20"] = df["close"].rolling(20).mean()
+            df["ma60"] = df["close"].rolling(60).mean()  # 60선 추가 (장기 추세용)
 
-            entry_signal = bool(
-                last["at_support"] and last["is_bullish"] and last["price_up"]
+            # - RSI (상대강도지수)
+            df["rsi"] = calculate_rsi(df["close"], 14)
+
+            # - Volume MA (거래량 이평)
+            df["vol_ma20"] = df["volume"].rolling(20).mean()
+
+            # (2) 마지막 봉 데이터 및 상태 플래그
+            last = df.iloc[-1]
+            prev = df.iloc[-2]
+
+            # 기본 조건
+            is_bullish = last["close"] > last["open"]       # 양봉
+            price_up = last["close"] > prev["close"]        # 전일 대비 상승
+
+            # -------------------------------------------------------
+            # A. 역추세 전략 (Reversal)
+            # 조건: 바닥권(Support 근처) + 양봉 + 상승반전
+            # -------------------------------------------------------
+            at_support = last["low"] <= last["support"] * (1 + self.params["band_pct"])
+            
+            sig_reversal = bool(at_support and is_bullish and price_up)
+
+            # -------------------------------------------------------
+            # B. 추세추종 전략 (Momentum Strong)
+            # 조건: 정배열(20>60) + RSI적절(50~75) + 거래량증가
+            # -------------------------------------------------------
+            
+            # 1. 정배열: 가격 > 20선 > 60선 (완벽한 상승 추세)
+            cond_align = (last["close"] > last["ma20"]) and (last["ma20"] > last["ma60"])
+            
+            # 2. RSI: 50 이상(힘 좋음) ~ 75 이하(아직 꼭지는 아님)
+            cond_rsi = (50 <= last["rsi"] <= 75)
+            
+            # 3. 거래량: 현재 거래량이 20이평보다 많음 (수급 들어옴)
+            cond_vol = (prev["volume"] > last["vol_ma20"]) or \
+                       (last["volume"] > last["vol_ma20"] * 0.4)
+
+            sig_momentum = bool(
+                cond_align and cond_rsi and cond_vol and is_bullish
             )
+
+            # -------------------------------------------------------
+
+            # 최종 신호: 둘 중 하나라도 만족
+            entry_signal = sig_reversal or sig_momentum
+
+            strategy_name = "NONE"
+            if sig_reversal:
+                strategy_name = "REVERSAL"
+            elif sig_momentum:
+                strategy_name = "MOMENTUM_STRONG"
+            
+            # -----------------------------------------------------------
 
             if entry_signal:
                 count_signals += 1
 
-            # 시퀀스 기반 ML feature
+            # (4) 머신러닝(ML) 점수 계산
             df_seq = df.iloc[-SEQ_LEN:]
             seq_feat = build_feature_from_seq(df_seq)
 
@@ -343,29 +344,29 @@ class GlobalRealTimeTrader:
                     self.db.log(f"⚠️ [ML예외] {region} {symbol}: {e}")
                     ml_proba = None
 
-            # 최종 진입 여부
+            # (5) 최종 진입 허용 여부 (Rule Signal + ML Score)
             entry_allowed = entry_signal and (
                 (ml_proba is not None) and (ml_proba >= self.ml_threshold)
             )
 
-            # DB 저장 (Signals)
+            # (6) 신호 DB 저장
             signal_id = self.db.save_signal(
                 region=region,
                 symbol=symbol,
                 price=float(last["close"]),
-                at_support=bool(last["at_support"]),
-                is_bullish=bool(last["is_bullish"]),
-                price_up=bool(last["price_up"]),
+                at_support=bool(at_support),
+                is_bullish=bool(is_bullish),
+                price_up=bool(price_up),
                 lookback=self.params["lookback"],
                 band_pct=self.params["band_pct"],
                 has_stock=has_stock,
                 entry_signal=entry_signal,
                 ml_proba=ml_proba,
                 entry_allowed=entry_allowed,
-                note="seq_model_check",
+                note=strategy_name, 
             )
 
-            # 매수 후보 등록 (보유 중인 종목은 후보에 넣지 않음 → 분할매수 없음)
+            # 매수 후보 등록 (미보유 종목만)
             if entry_allowed and not has_stock:
                 entry_candidates.append(
                     {
@@ -378,7 +379,7 @@ class GlobalRealTimeTrader:
                     }
                 )
 
-            # 매도 로직
+            # (7) 매도 로직 (이익실현 및 손절)
             if has_stock and my_info:
                 avg_price = my_info["avg_price"]
                 qty = my_info["qty"]
@@ -387,14 +388,17 @@ class GlobalRealTimeTrader:
                 sell_qty = 0
                 sell_type = ""
 
+                # 익절 1차 (2% 수익 시 60% 매도)
                 if profit_rate >= 0.02 and not state["tp1"]:
                     sell_qty = max(1, int(qty * 0.6))
-                    sell_type = "PROFIT_3%"
+                    sell_type = "PROFIT_3%" 
                     state["tp1"] = True
+                # 익절 2차 (5% 수익 시 남은거의 40% 추가 매도)
                 elif profit_rate >= 0.05 and not state["tp2"]:
                     sell_qty = max(1, int(qty * 0.4))
                     sell_type = "PROFIT_5%"
                     state["tp2"] = True
+                # 손절 (-2% 도달 시 전량 매도)
                 elif profit_rate <= -0.02:
                     sell_qty = qty
                     sell_type = "CUT_LOSS"
@@ -405,19 +409,16 @@ class GlobalRealTimeTrader:
                     if region == "KR":
                         success = self.fetcher.send_kr_order(symbol, "sell", sell_qty)
                     else:
-                        success = self.fetcher.send_us_order(
-                            excd, symbol, "sell", sell_qty, price
-                        )
+                        success = self.fetcher.send_us_order(excd, symbol, "sell", sell_qty, price)
+                    
                     if success:
-                        self.db.save_trade(
-                            symbol, sell_type, price, sell_qty, profit_rate * 100
-                        )
-                        self.db.log(f"📉[매도] {symbol}: {sell_type} {sell_qty}주")
+                        self.db.save_trade(symbol, sell_type, price, sell_qty, profit_rate * 100)
+                        self.db.log(f"📉[매도] {symbol}: {sell_type} {sell_qty}주 ({profit_rate*100:.2f}%)")
 
-        # 루프 종료 후 매수 집행
+        # 3. 매수 집행
         self.execute_buys(entry_candidates, kr_balance, us_balance, cash_krw, cash_usd)
 
-        # 마지막 요약 로그 (ML Top3)
+        # 4. 요약 로그
         ml_scores.sort(key=lambda x: x[1], reverse=True)
         top_ml_str = ", ".join([f"{s}({p:.2f})" for s, p in ml_scores[:3]])
 

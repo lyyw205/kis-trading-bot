@@ -250,30 +250,50 @@ class KisDataFetcher:
         url = f"{self.base_url}/uapi/overseas-stock/v1/trading/order"
         tr_id = self.tr_id_us_buy if order_type == "buy" else self.tr_id_us_sell
 
-        # [수정] 정규화 제거 -> 받은 exchange 그대로 사용
-        ovrs_excg_cd = exchange
+        exchange_map = {
+            "NAS": "NASD", 
+            "NYS": "NYSE", 
+            "AMS": "AMEX",
+            "NASD": "NASD",
+            "NYSE": "NYSE",
+            "AMEX": "AMEX"
+        }
+        # 매핑에 없으면 입력값 그대로 사용 (안전장치)
+        ovrs_excg_cd = exchange_map.get(exchange.upper(), exchange)
 
-        order_price_str = f"{round(float(price), 4):.4f}"
+        # 3. 가격 포맷팅 (소수점 2자리 권장)
+        order_price_str = f"{float(price):.2f}"
+        
         headers = self.get_headers(tr_id)
+        
         body = {
             "CANO": self.acc_no_prefix,
             "ACNT_PRDT_CD": self.acc_no_suffix,
-            "OVRS_EXCG_CD": ovrs_excg_cd,
+            "OVRS_EXCG_CD": ovrs_excg_cd,  # 변환된 코드 사용 (NASD 등)
             "PDNO": symbol,
-            "ORD_QTY": str(qty),
+            "ORD_QTY": str(int(qty)),      # 수량은 정수 문자열
             "OVRS_ORD_UNPR": order_price_str,
             "ORD_SVR_DVSN_CD": "0",
-            "ORD_DVSN": "00",
+            "ORD_DVSN": "00",              # 00: 지정가 (미국주식 필수)
         }
-        res = requests.post(url, headers=headers, data=json.dumps(body))
+        
         try:
-            if res.status_code == 200 and res.json().get("rt_cd") == "0":
-                self.log(f"✅ send_us_order 성공: {order_type} {symbol}")
+            res = requests.post(url, headers=headers, data=json.dumps(body))
+            res_json = res.json()
+            
+            # 성공 여부 체크
+            if res.status_code == 200 and res_json.get("rt_cd") == "0":
+                self.log(f"✅ send_us_order 성공: {symbol} {order_type} {qty}주 (${order_price_str})")
                 return True
-        except:
-            pass
-        self.log(f"❌ send_us_order 실패: {symbol}")
-        return False
+            else:
+                # 실패 시 구체적인 에러 메시지(msg1) 로그 출력
+                error_msg = res_json.get("msg1", "알 수 없는 에러")
+                self.log(f"❌ send_us_order 실패: {symbol} | 원인: {error_msg}")
+                return False
+                
+        except Exception as e:
+            self.log(f"❌ send_us_order 예외 발생: {symbol} | {e}")
+            return False
 
     # ------------------------
     # 시세 / OHLCV

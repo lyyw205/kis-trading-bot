@@ -51,8 +51,10 @@ if __name__ == "__main__":
     # -----------------------------
     # 3) ML Threshold 로드
     # -----------------------------
-    ml_threshold = load_ml_threshold(db)
-
+    # ml_threshold = load_ml_threshold(db)
+    ml_threshold = 0.30
+    db.log(f"🔧 [설정] ML Threshold 강제 적용: {ml_threshold} (기존 DB설정 무시)")
+    
     # -----------------------------
     # 4) 트레이더 인스턴스 생성
     # -----------------------------
@@ -72,7 +74,7 @@ if __name__ == "__main__":
         while True:
             try:
                 bot.run_check()
-                time.sleep(180)  # 3분마다 스캔
+                time.sleep(150)  # 3분마다 스캔
             except Exception as e:
                 db.log(f"⚠️ 메인 루프 에러: {e}")
                 time.sleep(10)
