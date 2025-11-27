@@ -1,0 +1,5 @@
+models/
+trading.db
+*.dbg
+
+.env

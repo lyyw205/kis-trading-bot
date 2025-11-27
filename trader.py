@@ -4,6 +4,7 @@ from datetime import datetime
 import joblib
 import numpy as np
 import pandas as pd
+from ai_helpers import make_entry_comment, make_exit_comment
 
 SEQ_LEN = 30   # 시퀀스 길이 (train_seq_model.py와 동일)
 
@@ -130,6 +131,7 @@ class GlobalRealTimeTrader:
             price = c["current_price"]
             ml_proba = c["ml_proba"]
             signal_id = c["signal_id"]
+            strategy_name = c.get("strategy_name", "UNKNOWN")
 
             buy_index = success_new
 
@@ -162,8 +164,37 @@ class GlobalRealTimeTrader:
                     slots_left -= 1
                     total_held += 1
                     success_new += 1
-                    self.db.save_trade(symbol, "BUY", price, qty, 0, signal_id, ml_proba, True)
+
+                    # ✅ trade_id 받기
+                    trade_id = self.db.save_trade(
+                        symbol,
+                        "BUY",
+                        price,
+                        qty,
+                        0,
+                        signal_id=signal_id,
+                        ml_proba=ml_proba,
+                        entry_allowed=True,
+                    )
                     self.db.log(f"✅🚀[KR매수] {symbol} {qty}주 | ML:{ml_proba:.3f}")
+
+                    # 🔹 AI 진입 코멘트 생성 + DB 저장
+                    try:
+                        entry_ctx = {
+                            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "region": region,
+                            "symbol": symbol,
+                            "exchange": None,
+                            "side": "BUY",
+                            "qty": qty,
+                            "price": float(price),
+                            "ml_proba": ml_proba,
+                            "strategy": strategy_name,
+                        }
+                        comment = make_entry_comment(entry_ctx)
+                        self.db.update_trade_entry_comment(trade_id, comment)
+                    except Exception as e:
+                        self.db.log(f"⚠️ [AI진입코멘트 실패] {symbol} | {e}")
 
             # --- US 매수 ---
             elif region == "US":
@@ -184,8 +215,35 @@ class GlobalRealTimeTrader:
                     slots_left -= 1
                     total_held += 1
                     success_new += 1
-                    self.db.save_trade(symbol, "BUY", price, qty, 0, signal_id, ml_proba, True)
+
+                    trade_id = self.db.save_trade(
+                        symbol,
+                        "BUY",
+                        price,
+                        qty,
+                        0,
+                        signal_id=signal_id,
+                        ml_proba=ml_proba,
+                        entry_allowed=True,
+                    )
                     self.db.log(f"✅🚀[US매수] {symbol} {qty}주 | ML:{ml_proba:.3f}")
+
+                    try:
+                        entry_ctx = {
+                            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "region": region,
+                            "symbol": symbol,
+                            "exchange": excd,
+                            "side": "BUY",
+                            "qty": qty,
+                            "price": float(price),
+                            "ml_proba": ml_proba,
+                            "strategy": strategy_name,
+                        }
+                        comment = make_entry_comment(entry_ctx)
+                        self.db.update_trade_entry_comment(trade_id, comment)
+                    except Exception as e:
+                        self.db.log(f"⚠️ [AI진입코멘트 실패] {symbol} | {e}")
 
     # ------------------------------
     # 메인 체크 루프 (수정 완료)
@@ -408,6 +466,7 @@ class GlobalRealTimeTrader:
                         "current_price": price,
                         "ml_proba": ml_proba,
                         "signal_id": signal_id,
+                        "strategy_name": strategy_name,
                     }
                 )
 
@@ -507,8 +566,38 @@ class GlobalRealTimeTrader:
                         success = self.fetcher.send_us_order(excd, symbol, "sell", sell_qty, price)
                     
                     if success:
-                        self.db.save_trade(symbol, sell_type, price, sell_qty, profit_rate * 100)
-                        self.db.log(f"📉[매도] {symbol}: {sell_type} {sell_qty}주 ({profit_rate*100:.2f}%)")
+                        # ✅ trade_id 받기
+                        trade_id = self.db.save_trade(
+                            symbol,
+                            sell_type,          # side/타입
+                            price,
+                            sell_qty,
+                            profit_rate * 100,  # pnl_pct
+                        )
+                        self.db.log(
+                            f"📉[매도] {symbol}: {sell_type} {sell_qty}주 ({profit_rate*100:.2f}%)"
+                        )
+
+                        # 🔹 AI 청산 코멘트 생성 + DB 저장
+                        try:
+                            holding_minutes = elapsed_min  # 이미 계산해 둔 값 사용
+                            exit_ctx = {
+                                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "region": region,
+                                "symbol": symbol,
+                                "exchange": excd if region == "US" else None,
+                                "side": "SELL",
+                                "qty": sell_qty,
+                                "avg_entry": float(avg_price),
+                                "exit_price": float(price),
+                                "pnl_pct": profit_rate * 100,
+                                "reason": sell_type,
+                                "holding_minutes": holding_minutes,
+                            }
+                            comment = make_exit_comment(exit_ctx)
+                            self.db.update_trade_exit_comment(trade_id, comment)
+                        except Exception as e:
+                            self.db.log(f"⚠️ [AI청산코멘트 실패] {symbol} | {e}")
 
         # ── for t in self.targets: 끝 ──
 

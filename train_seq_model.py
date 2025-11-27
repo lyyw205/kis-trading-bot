@@ -102,18 +102,18 @@ def build_feature_from_seq(df_seq):
 if __name__ == "__main__":
     os.makedirs(MODEL_DIR, exist_ok=True)
     db = BotDatabase(DB_PATH)
-    db.log("🧠 시퀀스 기반 ML 모델 학습 시작")
+    db.log("시퀀스 기반 ML 모델 학습 시작")
 
     # 1) 샘플 로드
     df_samples = load_ml_seq_samples()
     if df_samples.empty:
-        print("❌ ml_seq_samples 테이블이 비어 있습니다. 먼저 build_ml_seq_samples.py 를 실행하세요.")
+        print("ml_seq_samples 테이블이 비어 있습니다. 먼저 build_ml_seq_samples.py 를 실행하세요.")
         raise SystemExit
 
     # label 이 0/1인 것만 사용
     df_samples = df_samples[df_samples["label"].isin([0, 1])].copy()
     if df_samples.empty:
-        print("❌ 사용 가능한 라벨(0/1)이 없습니다.")
+        print("사용 가능한 라벨(0/1)이 없습니다.")
         raise SystemExit
 
     # ✅ 1-1) UNIVERSE_STOCKS 에 포함된 종목만 남기기
@@ -125,17 +125,17 @@ if __name__ == "__main__":
     ].copy()
     after_cnt = len(df_samples)
 
-    print(f"🌌 UNIVERSE 필터 전 샘플 수: {before_cnt}")
-    print(f"🌌 UNIVERSE 필터 후 샘플 수: {after_cnt}")
+    print(f"UNIVERSE 필터 전 샘플 수: {before_cnt}")
+    print(f"UNIVERSE 필터 후 샘플 수: {after_cnt}")
 
     if df_samples.empty:
-        print("❌ UNIVERSE_STOCKS에 해당하는 샘플이 없습니다. UNIVERSE 구성을 확인하세요.")
+        print("UNIVERSE_STOCKS에 해당하는 샘플이 없습니다. UNIVERSE 구성을 확인하세요.")
         raise SystemExit
 
     # 2) OHLCV 전체 로드
     ohlcv_dict = load_all_ohlcv()
     if not ohlcv_dict:
-        print("❌ ohlcv_data 테이블이 비어 있거나 데이터가 없습니다.")
+        print("ohlcv_data 테이블이 비어 있거나 데이터가 없습니다.")
         raise SystemExit
 
     X_list = []
@@ -183,15 +183,15 @@ if __name__ == "__main__":
         y_list.append(label)
 
     if not X_list:
-        print("❌ 유효한 피처를 가진 샘플이 없습니다.")
+        print("유효한 피처를 가진 샘플이 없습니다.")
         raise SystemExit
 
     X = np.array(X_list, dtype=float)
     y = np.array(y_list, dtype=int)
 
-    print(f"✅ 학습에 사용되는 샘플 수: {len(X)}")
-    print(f"   스킵된 샘플 수: {skip_count}")
-    print(f"   피처 차원: {X.shape[1]}")
+    print(f"학습에 사용되는 샘플 수: {len(X)}")
+    print(f"스킵된 샘플 수: {skip_count}")
+    print(f"피처 차원: {X.shape[1]}")
 
     # 4) Train / Test split
     X_train, X_test, y_train, y_test = train_test_split(
@@ -219,7 +219,7 @@ if __name__ == "__main__":
     print(confusion_matrix(y_test, y_pred))
 
     accuracy = float((y_pred == y_test).mean())
-    print(f"✅ Validation Accuracy: {accuracy:.4f}")
+    print(f"Validation Accuracy: {accuracy:.4f}")
 
     # 7) 모델 버전 이름/경로 생성
     now = datetime.now()
@@ -229,7 +229,7 @@ if __name__ == "__main__":
 
     # 8) 모델 저장
     joblib.dump(model, model_path)
-    print(f"💾 모델 저장 완료: {model_path}")
+    print(f"모델 저장 완료: {model_path}")
 
     # 9) models 테이블에 버전 기록
     try:
@@ -244,15 +244,15 @@ if __name__ == "__main__":
         )
         conn.commit()
         conn.close()
-        db.log(f"✅ models 테이블에 버전 기록 완료: {model_path}")
+        db.log(f"models 테이블에 버전 기록 완료: {model_path}")
     except Exception as e:
-        db.log(f"⚠️ models 테이블 기록 실패: {e}")
+        db.log(f"models 테이블 기록 실패: {e}")
 
     # 10) settings 에 active_model_path 갱신
     try:
         db.set_setting("active_model_path", model_path)
-        db.log(f"🎯 active_model_path 갱신: {model_path}")
+        db.log(f"active_model_path 갱신: {model_path}")
     except Exception as e:
-        db.log(f"⚠️ active_model_path 갱신 실패: {e}")
+        db.log(f"active_model_path 갱신 실패: {e}")
 
-    db.log(f"🎉 시퀀스 기반 ML 모델 학습/저장 완료 (accuracy={accuracy:.4f})")
+    db.log(f"시퀀스 기반 ML 모델 학습/저장 완료 (accuracy={accuracy:.4f})")

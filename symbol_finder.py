@@ -75,11 +75,13 @@ def get_kis_format_list(symbols):
 # 👇 조회할 종목 리스트 (여기에 다 넣으세요)
 # ==========================================
 MY_SYMBOLS = [
-    "RUBI", "CETY", "PMCB", "AEHL", "AMZE", "INHD", "DGLY", "ATCH",
-    "BMNU", "AIIO", "SOXS", "PSNYW", "NUKK", "BURU", "SOLT", "IRE",
-    "TSLL", "MNDR", "IONZ", "TSLQ", "BMNZ", "RGTZ", "ICON", "AMDL", "SOXL", "SATL", "ZONE", "NUKK",
-    "ZONE", "CWVX", "NVD", "CISO", "GGLS", "ULTY", "IVF", "NVOX",
-    "ONDS", "GDYN", "VNRX", "SURG", "SGBX",
+    "NVDA", "TSLA", "QQQ", "GOOGL", "ORCL", "AMD", "SPY", "META",
+    "HOOD", "GOOG", "AVGO", "COIN", "AMZN", "MSTR", "MU", "SOFI",
+    "SNDK", "PLTR", "INTC", "MSFT", "BABA", "CRCL", "BMNR", "NFLX", "AAPL", "IREN", "HIMS", "CRWV",
+    "ZS", "TMC", "OPEN", "ADBE", "RGTI", "APP", "CLSK", "OKLO",
+    "QUBT", "RDDT", "ONDS", "BITF", "SGBX", "RKLB","NKE","BA","QCOM","QBTS","BURU","INHD","GPUS",
+    "DVLT","LOBO","AIIO","PLUG","DFLI","ASST","LAES","FMFC","MSGM","SLDP","NFE","VSME","GNS","RZLV","NUAI",
+    "SES","REKR","LAC","BYND","WTO","YDKG",
 ]
 
 if __name__ == "__main__":

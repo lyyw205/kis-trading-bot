@@ -53,7 +53,13 @@ class BotDatabase:
                      profit REAL,
                      signal_id INTEGER,
                      ml_proba REAL,
-                     entry_allowed INTEGER)''')
+                     entry_allowed INTEGER,
+                     order_no TEXT,
+                     source TEXT,
+                     entry_comment TEXT,
+                     exit_comment TEXT)'''
+                  )
+        
 
         # 2) 로그
         c.execute('''CREATE TABLE IF NOT EXISTS logs
@@ -152,6 +158,17 @@ class BotDatabase:
             )
         """)
 
+        # 10) AI 일일 리포트 저장 (텍스트)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS ai_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT,                 -- "YYYY-MM-DD"
+                created_at TEXT,           -- 리포트 생성 시각
+                daily_report TEXT,         -- 일일 매매 리포트 전문
+                strategy_ideas TEXT        -- 전략 브레인스토밍 결과
+            )
+        """)
+
         conn.commit()
         conn.close()
         
@@ -226,10 +243,26 @@ class BotDatabase:
     # -----------------------------
     # 트레이드 / 시그널
     # -----------------------------
-    def save_trade(self, symbol, trade_type, price, qty, profit,
-                   ml_proba=None, extra=None, trade_time=None):
+    def save_trade(
+        self,
+        symbol,
+        trade_type,
+        price,
+        qty,
+        profit,
+        signal_id=None,
+        ml_proba=None,
+        entry_allowed=None,
+        extra=None,
+        trade_time=None,
+    ):
         """
-        trade_time: 문자열 'YYYY-MM-DD HH:MM:SS' (없으면 현재시간)
+        trades 테이블에 한 건 기록하고, 생성된 trade_id를 리턴.
+
+        extra: {
+          "order_no": "...",
+          "source": "OpenAPI" / "Mobile" 등
+        }
         """
         conn = sqlite3.connect(self.db_name)
         cur = conn.cursor()
@@ -241,26 +274,37 @@ class BotDatabase:
             source = extra.get("source")
 
         if trade_time is None:
-            # 예전처럼 지금 시간
-            cur.execute(
-                """
-                INSERT INTO trades (time, symbol, type, price, qty, profit, ml_proba, order_no, source)
-                VALUES (datetime('now','localtime'), ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (symbol, trade_type, price, qty, profit, ml_proba, order_no, source),
-            )
+            time_value = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         else:
-            # 우리가 넘겨준 체결 시간 사용
-            cur.execute(
-                """
-                INSERT INTO trades (time, symbol, type, price, qty, profit, ml_proba, order_no, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (trade_time, symbol, trade_type, price, qty, profit, ml_proba, order_no, source),
-            )
+            time_value = trade_time
 
+        cur.execute(
+            """
+            INSERT INTO trades
+                (time, symbol, type, price, qty,
+                 profit, signal_id, ml_proba, entry_allowed,
+                 order_no, source, entry_comment, exit_comment)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+            """,
+            (
+                time_value,
+                symbol,
+                trade_type,
+                float(price),
+                int(qty),
+                float(profit),
+                signal_id,
+                None if ml_proba is None else float(ml_proba),
+                None if entry_allowed is None else int(entry_allowed),
+                order_no,
+                source,
+            ),
+        )
+
+        trade_id = cur.lastrowid
         conn.commit()
         conn.close()
+        return trade_id
 
     def save_signal(self, *, region, symbol, price,
                     at_support, is_bullish, price_up,
@@ -399,3 +443,89 @@ class BotDatabase:
             conn.close()
         except Exception as e:
             self.log(f"⚠️ save_backtest 실패: {e}")
+
+    # -----------------------------
+    # ai 코멘트
+    # -----------------------------
+    def update_trade_entry_comment(self, trade_id: int, comment: str):
+        conn = sqlite3.connect(self.db_name)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE trades
+            SET entry_comment = ?
+            WHERE id = ?
+            """,
+            (comment, trade_id),
+        )
+        conn.commit()
+        conn.close()  
+
+    def update_trade_exit_comment(self, trade_id: int, comment: str):
+        conn = sqlite3.connect(self.db_name)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE trades
+            SET exit_comment = ?
+            WHERE id = ?
+            """,
+            (comment, trade_id),
+        )
+        conn.commit()
+        conn.close()
+
+    # -----------------------------
+    # AI 리포트 저장 / 조회
+    # -----------------------------
+    def save_ai_report(self, date_str: str, daily_report: str, strategy_ideas: str):
+        """
+        date_str: "YYYY-MM-DD"
+        """
+        try:
+            conn = sqlite3.connect(self.db_name)
+            c = conn.cursor()
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            c.execute(
+                """
+                INSERT INTO ai_reports (date, created_at, daily_report, strategy_ideas)
+                VALUES (?, ?, ?, ?)
+                """,
+                (date_str, now, daily_report, strategy_ideas),
+            )
+            conn.commit()
+            conn.close()
+            self.log(f"🧠 AI 리포트 저장 완료: {date_str}")
+        except Exception as e:
+            self.log(f"⚠️ save_ai_report 실패: {e}")
+
+    def get_latest_ai_report(self):
+        """
+        가장 최근 생성된 AI 리포트 1개 반환.
+        없으면 None 리턴.
+        """
+        try:
+            conn = sqlite3.connect(self.db_name)
+            c = conn.cursor()
+            c.execute(
+                """
+                SELECT date, created_at, daily_report, strategy_ideas
+                FROM ai_reports
+                ORDER BY date DESC, id DESC
+                LIMIT 1
+                """
+            )
+            row = c.fetchone()
+            conn.close()
+            if not row:
+                return None
+            return {
+                "date": row[0],
+                "created_at": row[1],
+                "daily_report": row[2],
+                "strategy_ideas": row[3],
+            }
+        except Exception as e:
+            self.log(f"⚠️ get_latest_ai_report 실패: {e}")
+            return None

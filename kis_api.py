@@ -593,7 +593,7 @@ class KisDataFetcher:
                 return self.get_daily_ohlcv(symbol)
         else:
             if interval == "5m":
-                return self.get_us_minute_ohlcv_5m(exchange, symbol, count=count)
+                return self.get_us_minute_ohlcv_5m(exchange, symbol, max_count=count)
             elif interval == "1d":
                 return self.get_overseas_daily_ohlcv(exchange, symbol)
         

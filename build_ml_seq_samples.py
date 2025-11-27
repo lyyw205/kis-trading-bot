@@ -214,15 +214,15 @@ def save_samples(samples):
 
 if __name__ == "__main__":
     db = BotDatabase(DB_PATH)
-    db.log("🧪 build_ml_seq_samples.py 시작 (Reversal + Momentum)")
+    db.log(" build_ml_seq_samples.py 시작 (Reversal + Momentum)")
 
     ohlcv_dict = load_ohlcv_all()
     if not ohlcv_dict:
-        print("❌ OHLCV가 없습니다. build_ohlcv_history.py 먼저 실행하세요.")
+        print(" OHLCV가 없습니다. build_ohlcv_history.py 먼저 실행하세요.")
         raise SystemExit
 
     samples = build_samples(ohlcv_dict)
-    print(f"📦 생성된 샘플 수: {len(samples)}")
+    print(f" 생성된 샘플 수: {len(samples)}")
 
     save_samples(samples)
 

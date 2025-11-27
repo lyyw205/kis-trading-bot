@@ -5,6 +5,7 @@ import os
 import sqlite3
 import pandas as pd
 import numpy as np
+from glob import glob 
 from datetime import date
 from db import BotDatabase
 from build_ohlcv_history import (
@@ -376,6 +377,71 @@ def symbol_data():
         }
     )
 
+@app.route("/api/ai-report/full")
+def api_ai_report_full():
+    """
+    최신 AI 리포트(일일 트레이드 리포트 + 전략 아이디어) +
+    최신 모델 조언 텍스트까지 한 번에 내려주는 엔드포인트.
+    프론트에서 3단 레이아웃으로 쓰는 용도.
+    """
+    # 기본 응답 뼈대
+    result = {
+        "date": None,
+        "created_at": None,
+        "daily_report": "",
+        "strategy_ideas": "",
+        "model_advice_date": None,
+        "model_advice": "",
+    }
+
+    # 1) ai_reports 테이블에서 최신 1건 가져오기
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT date, created_at, daily_report, strategy_ideas
+            FROM ai_reports
+            ORDER BY date DESC, id DESC
+            LIMIT 1
+            """
+        )
+        row = cur.fetchone()
+        conn.close()
+
+        if row:
+            result["date"] = row[0]
+            result["created_at"] = row[1]
+            result["daily_report"] = row[2] or ""
+            result["strategy_ideas"] = row[3] or ""
+    except Exception as e:
+        print("ai_reports 조회 오류:", e)
+
+    # 2) reports 폴더에서 *_model_advice.txt 중 가장 최신 파일 읽기
+    try:
+        os.makedirs("reports", exist_ok=True)
+        files = glob(os.path.join("reports", "*_model_advice.txt"))
+        if files:
+            # 파일명 또는 수정시간 기준 최신 선택
+            latest_file = max(files, key=os.path.getmtime)
+
+            # 파일명에서 날짜 추출 시도 (예: 'reports/2025-11-27_model_advice.txt')
+            base = os.path.basename(latest_file)
+            if base.endswith("_model_advice.txt"):
+                date_part = base.replace("_model_advice.txt", "")
+            else:
+                date_part = None
+
+            with open(latest_file, "r", encoding="utf-8") as f:
+                text = f.read()
+
+            result["model_advice_date"] = date_part
+            result["model_advice"] = text
+    except Exception as e:
+        print("model_advice 파일 로드 오류:", e)
+
+    return jsonify(result)
+
 # -----------------------------
 # ML 개선안 생성 함수
 # -----------------------------
@@ -478,6 +544,10 @@ def dashboard():
     universe_cov = get_universe_coverage()
     last_universe_backfill = get_last_universe_backfill_time(db=BotDatabase(DB_PATH))
     universe_failures = get_recent_backfill_failures(limit=30)
+
+    if not universe_cov.empty:
+        universe_cov = universe_cov.sort_values("candles", ascending=False)
+
     if not trades.empty:
         round_trades_df, round_details = build_round_trades(trades)
     else:
@@ -610,20 +680,25 @@ def dashboard():
             )
         ]
 
-    # 종목 드롭다운용: trades 또는 ohlcv_data 에 데이터가 있는 심볼 목록
-    conn = sqlite3.connect(DB_PATH)
-    df_sym_trades = pd.read_sql_query(
-        "SELECT DISTINCT symbol FROM trades ORDER BY symbol", conn
-    )
-    df_sym_ohlcv = pd.read_sql_query(
-        "SELECT DISTINCT symbol FROM ohlcv_data ORDER BY symbol", conn
-    )
-    conn.close()
-
-    symbols_with_data = sorted(
-        set(df_sym_trades["symbol"].tolist()) |
-        set(df_sym_ohlcv["symbol"].tolist())
-    )
+    # 종목 드롭다운용:
+    #  - trades 테이블에서 실제 거래가 있었던 심볼만
+    #  - 마지막(trades.time 기준) 거래 시각 순서대로 정렬
+    if not trades.empty:
+        # time은 load_trades()에서 이미 datetime으로 변환됨
+        last_trade_by_symbol = (
+            trades.groupby("symbol")["time"]
+            .max()                              # 각 심볼의 마지막 거래 시각
+            .sort_values(ascending=False)       # 최근 거래 순으로 정렬
+        )
+        symbols_with_data = last_trade_by_symbol.index.tolist()
+    else:
+        # 혹시 trades가 완전 비어 있을 때는 ohlcv 기준으로라도 보여주기 (백업)
+        conn = sqlite3.connect(DB_PATH)
+        df_sym_ohlcv = pd.read_sql_query(
+            "SELECT DISTINCT symbol FROM ohlcv_data ORDER BY symbol", conn
+        )
+        conn.close()
+        symbols_with_data = df_sym_ohlcv["symbol"].tolist()
     
 
     return render_template(
