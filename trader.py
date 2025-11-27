@@ -191,6 +191,7 @@ class GlobalRealTimeTrader:
     # 메인 체크 루프 (수정 완료)
     # ------------------------------
     def run_check(self):
+        self.db.log(f"🔍 [DEBUG] KIS 모드: {self.fetcher.mode}")
         # 1. 잔고 및 현금 조회
         try:
             kr_balance = self.fetcher.get_kr_balance()
@@ -212,6 +213,11 @@ class GlobalRealTimeTrader:
         count_signals = 0
         ml_scores = []
 
+        skip_market_closed = 0
+        skip_no_price = 0
+        skip_no_df = 0
+        skip_short_df = 0
+
         # 2. 종목 스캔 루프
         for t in self.targets:
             region = t["region"]
@@ -220,13 +226,18 @@ class GlobalRealTimeTrader:
 
             time.sleep(0.2)  # API 과부하 방지
 
-            # 장 운영 시간 확인
+            # ------------------------------
+            # (1) 장 운영 시간 확인
+            # ------------------------------
             if not self.is_market_open(region):
-                # 장외 시간 로그는 너무 많으면 지저분하므로 생략 가능
+                skip_market_closed += 1
                 count_skipped += 1
+                # self.db.log(f"⏱️ [Skip:장마감] {symbol}")
                 continue
 
-            # 현재가 조회
+            # ------------------------------
+            # (2) 현재가 조회
+            # ------------------------------
             if region == "KR":
                 price = self.fetcher.get_kr_current_price(symbol)
                 has_stock = (symbol in kr_balance) or (symbol in self.trade_state)
@@ -237,30 +248,51 @@ class GlobalRealTimeTrader:
                 my_info = us_balance.get(symbol)
 
             if not price:
+                skip_no_price += 1
                 count_skipped += 1
+                # self.db.log(f"🚫 [Skip:가격없음] {symbol}")
                 continue
 
-            # 캔들 데이터 조회 (5분봉)
+            # ------------------------------
+            # (3) 캔들(5분봉) 조회
+            # ------------------------------
             interval = "5m"
-            df = self.fetcher.get_ohlcv(region, symbol, excd, interval=interval, count=120)
+            if region == "KR":
+                df = self.fetcher.get_ohlcv(
+                    region,
+                    symbol,
+                    interval=interval,
+                    count=120,
+                )
+            else:
+                df = self.fetcher.get_ohlcv(
+                    region,
+                    symbol,
+                    excd,
+                    interval=interval,
+                    count=120,
+                )
 
             if df is None or df.empty:
-                # self.db.log(f"🚫 [Skip] {symbol}: 데이터 없음")
+                skip_no_df += 1
                 count_skipped += 1
+                # self.db.log(f"🚫 [Skip:캔들없음] {symbol}")
                 continue
 
             if len(df) < SEQ_LEN:
-                # self.db.log(f"⚠️ [Skip] {symbol}: 데이터 부족")
+                skip_short_df += 1
                 count_skipped += 1
+                # self.db.log(f"🚫 [Skip:캔들부족] {symbol} len={len(df)}")
                 continue
+
+            # ✅ 여기까지 통과한 종목만 진짜로 "대상"으로 카운트
+            count_checked += 1
 
             # 데이터 저장
             try:
                 self.db.save_ohlcv_df(region, symbol, interval, df)
             except Exception:
                 pass
-
-            count_checked += 1
 
             # -----------------------------------------------------------
             # [전략 로직 수정 구간] - Momentum & Reversal
@@ -383,28 +415,91 @@ class GlobalRealTimeTrader:
             if has_stock and my_info:
                 avg_price = my_info["avg_price"]
                 qty = my_info["qty"]
-                profit_rate = (price - avg_price) / avg_price
-                state = self.trade_state.setdefault(symbol, {"tp1": False, "tp2": False})
+                profit_rate = (price - avg_price) / avg_price   # 소수 (0.03 = 3%)
+
+                # 심볼별 상태 초기화 / 가져오기
+                state = self.trade_state.setdefault(symbol, {
+                    "tp1": False,
+                    "tp2": False,
+                    "entry_time": datetime.utcnow(),   # 매수 시점에 세팅해두는 게 제일 좋고,
+                    "max_profit": 0.0                  # 여기서는 안전용으로 기본값만 둠
+                })
+
+                now = datetime.utcnow()
+                # 익절/횡보 판단을 위해 최고 수익률 갱신
+                state["max_profit"] = max(state.get("max_profit", 0.0), profit_rate)
+
+                elapsed_min = (now - state.get("entry_time", now)).total_seconds() / 60.0
+
                 sell_qty = 0
                 sell_type = ""
 
-                # 익절 1차 (2% 수익 시 60% 매도)
-                if profit_rate >= 0.02 and not state["tp1"]:
-                    sell_qty = max(1, int(qty * 0.6))
-                    sell_type = "PROFIT_3%" 
-                    state["tp1"] = True
-                # 익절 2차 (5% 수익 시 남은거의 40% 추가 매도)
-                elif profit_rate >= 0.05 and not state["tp2"]:
-                    sell_qty = max(1, int(qty * 0.4))
-                    sell_type = "PROFIT_5%"
-                    state["tp2"] = True
-                # 손절 (-2% 도달 시 전량 매도)
-                elif profit_rate <= -0.02:
+                # 1) 손절 (-2% 도달 시 전량 매도)
+                if profit_rate <= -0.02:
                     sell_qty = qty
                     sell_type = "CUT_LOSS"
                     if symbol in self.trade_state:
                         del self.trade_state[symbol]
 
+                # 2) 익절 2차 (5% 수익 시 남은 것의 40% 매도)
+                #    * 만약 처음부터 5%를 한방에 넘겼다면, tp1 안 찍고 바로 여기로 들어올 수도 있음
+                elif profit_rate >= 0.05 and not state["tp2"]:
+                    # 현재 수량 기준으로 40% 익절
+                    sell_qty = max(1, int(qty * 0.4))
+                    sell_type = "PROFIT_5%"
+                    state["tp2"] = True
+                    # tp1 안 찍고 바로 5% 온 경우, tp1도 찍힌 것으로 처리
+                    state["tp1"] = True
+
+                # 3) 익절 1차 (3% 수익 시 60% 매도)
+                elif profit_rate >= 0.03 and not state["tp1"]:
+                    sell_qty = max(1, int(qty * 0.6))
+                    sell_type = "PROFIT_3%"
+                    state["tp1"] = True
+                    # 1차 익절 시점에 기준 시간 리셋 (원하면 유지해도 됨)
+                    state["entry_time"] = now
+
+                # 4) 1차 익절 이후, 5% 못 가고 3%로 되돌림 → 전량 매도
+                elif state["tp1"] and not state["tp2"]:
+                    # 어느 정도 위로 갔다가 (예: 4% 이상)
+                    # 다시 3% 근처(약간 여유를 둬서 2.8% 이하)로 내려오면 정리
+                    if state.get("max_profit", 0.0) >= 0.04 and profit_rate <= 0.028:
+                        sell_qty = qty
+                        sell_type = "EXIT_RETRACE_TP1"
+                        if symbol in self.trade_state:
+                            del self.trade_state[symbol]
+
+                # 5) 2차 익절 이후, 상승 끊기거나 5% 되돌림 → 전량 매도
+                elif state["tp2"]:
+                    max_p = state.get("max_profit", 0.0)
+                    # (a) 7% 이상 갔다가 5% 부근까지 되돌림
+                    if max_p >= 0.07 and profit_rate <= 0.052:
+                        sell_qty = qty
+                        sell_type = "EXIT_RETRACE_TP2"
+                        if symbol in self.trade_state:
+                            del self.trade_state[symbol]
+
+                    # 필요하다면 여기서 "상승 캔들 끊김" 조건(이전 종가 대비 하락 등)도
+                    # state에 이전 가격/종가를 저장해두고 추가로 체크 가능
+
+                # 6) 횡보 정리 조건 (익절/손절 사이에서 애매하게 기는 애들 강제 퇴장)
+
+                # 6-1) 진입 후 60분 동안 -1.5% ~ +2.5% 박스 안에서만 움직이면 전량 매도
+                if sell_qty == 0 and elapsed_min >= 60 and -0.015 <= profit_rate <= 0.025:
+                    sell_qty = qty
+                    sell_type = "TIMEOUT_NO_TP"
+                    if symbol in self.trade_state:
+                        del self.trade_state[symbol]
+
+                # 6-2) 1차 익절 후 45분 안에 5% 도달 못하고 +2.5% ~ +4.5%에서 횡보 → 전량 매도
+                if sell_qty == 0 and state["tp1"] and not state["tp2"] and elapsed_min >= 45:
+                    if 0.025 <= profit_rate <= 0.045:
+                        sell_qty = qty
+                        sell_type = "TIMEOUT_AFTER_TP1"
+                        if symbol in self.trade_state:
+                            del self.trade_state[symbol]
+
+                # === 실제 주문 전송 ===
                 if sell_qty > 0:
                     if region == "KR":
                         success = self.fetcher.send_kr_order(symbol, "sell", sell_qty)
@@ -415,7 +510,9 @@ class GlobalRealTimeTrader:
                         self.db.save_trade(symbol, sell_type, price, sell_qty, profit_rate * 100)
                         self.db.log(f"📉[매도] {symbol}: {sell_type} {sell_qty}주 ({profit_rate*100:.2f}%)")
 
-        # 3. 매수 집행
+        # ── for t in self.targets: 끝 ──
+
+        # 3. 매수 집행 (전체 스캔 끝난 뒤에 한 번만)
         self.execute_buys(entry_candidates, kr_balance, us_balance, cash_krw, cash_usd)
 
         # 4. 요약 로그
@@ -424,6 +521,8 @@ class GlobalRealTimeTrader:
 
         summary_msg = (
             f"📊 [스캔완료] 대상:{count_checked} 스킵:{count_skipped} "
+            f"(장마감:{skip_market_closed}, 가격없음:{skip_no_price}, "
+            f"데이터없음:{skip_no_df}, 캔들부족:{skip_short_df}) "
             f"| 매수후보:{len(entry_candidates)} "
             f"| 🔥ML Top3: [{top_ml_str}]"
         )

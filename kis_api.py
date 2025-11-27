@@ -112,6 +112,85 @@ class KisDataFetcher:
     # ------------------------
     # 예수금 / 잔고 관련
     # ------------------------
+    def get_us_fills(self, start_date, end_date, excd="NASD",
+                     sll_buy_dvsn="00", ccld_nccs_dvsn="00",
+                     ctx_area_nk200="", ctx_area_fk200=""):
+        """
+        방금 테스트해서 STATUS: 200 찍혔던 그 함수 (원본 JSON 반환)
+        """
+        url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-ccnl"
+        tr_id = "VTTS3035R" if self.mode == "virtual" else "TTTS3035R"
+        headers = self.get_headers(tr_id)
+
+        params = {
+            "CANO": self.acc_no_prefix,
+            "ACNT_PRDT_CD": self.acc_no_suffix,
+            "PDNO": "",
+            "ORD_STRT_DT": start_date,
+            "ORD_END_DT": end_date,
+            "SLL_BUY_DVSN": sll_buy_dvsn,       # 00=전체, 01=매도, 02=매수
+            "CCLD_NCCS_DVSN": ccld_nccs_dvsn,   # 00=전체, 01=체결, 02=미체결
+            "OVRS_EXCG_CD": excd,               # NASD/NYSE/AMEX 등
+            "SORT_SQN": "DS",                   # 내림차순
+            "ORD_DT": "",
+            "ORD_GNO_BRNO": "",
+            "ODNO": "",
+            "CTX_AREA_NK200": ctx_area_nk200,
+            "CTX_AREA_FK200": ctx_area_fk200,
+        }
+
+        resp = requests.get(url, headers=headers, params=params)
+        resp.raise_for_status()
+        return resp.json()
+
+    # 🔹 새로 추가: 우리 트레이드 포맷으로 변환
+    def get_us_fills_normalized(self, start_date, end_date, excd="NASD"):
+        raw = self.get_us_fills(
+            start_date=start_date,
+            end_date=end_date,
+            excd=excd,
+            sll_buy_dvsn="00",
+            ccld_nccs_dvsn="00",
+        )
+
+        fills = []
+        for row in raw.get("output", []):
+            # 체결 수량 0이면 스킵
+            ccld_qty = float(row.get("ft_ccld_qty", "0") or "0")
+            if ccld_qty == 0:
+                continue
+
+            side_code = row.get("sll_buy_dvsn_cd", "")
+            side = "BUY" if side_code == "02" else "SELL"
+
+            # ord_dt(YYYYMMDD) + ord_tmd(HHMMSS) → datetime
+            dt_str = (row.get("ord_dt", "") or "") + (row.get("ord_tmd", "") or "")
+            try:
+                dt = datetime.strptime(dt_str, "%Y%m%d%H%M%S")
+            except ValueError:
+                # 혹시 포맷이 이상하면 그냥 문자열 그대로 저장해도 됨
+                dt = None
+
+            fills.append(
+                {
+                    "time": dt,
+                    "time_str": dt.strftime("%Y-%m-%d %H:%M:%S") if dt else dt_str,
+                    "symbol": row.get("pdno"),
+                    "type": side,
+                    "price": float(row.get("ft_ccld_unpr3", "0") or "0"),
+                    "qty": ccld_qty,
+                    "excd": row.get("ovrs_excg_cd"),
+                    "market_name": row.get("tr_mket_name"),
+                    "order_no": row.get("odno"),
+                    "orgn_order_no": row.get("orgn_odno"),
+                    "status": row.get("prcs_stat_name"),
+                    "currency": row.get("tr_crcy_cd"),
+                    "source": row.get("mdia_dvsn_name"),  # 모바일 / OpenAPI 등
+                }
+            )
+
+        return fills
+
     def get_kr_buyable_cash(self):
         url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-psbl-order"
         tr_id = "VTTC8908R" if self.mode == "virtual" else "TTTC8908R"
@@ -325,120 +404,183 @@ class KisDataFetcher:
             return None
 
     def get_minute_ohlcv_5m(self, symbol, count=200):
-        if not self.access_token: self.auth()
+        """
+        국내 5분봉 OHLCV 조회 (REST주식당일분봉조회)
+        - 실패 원인 디버깅 로그 강화 버전
+        """
+        if not self.access_token:
+            self.auth()
+
         url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
-        headers = self.get_headers("FHKST03010200")
+        tr_id = "FHKST03010200"   # 당일 분봉 조회 TR
+        headers = self.get_headers(tr_id)
+
+        # 기준 시간: 지금 시각(HHMMSS) -> 공식 예제들은 보통 '100000' 이런 식으로 고정값도 많이 씀
+        now_hms = datetime.now().strftime("%H%M%S")
+
         params = {
-            "FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": symbol,
-            "FID_INPUT_HOUR_1": "", "FID_PW_DATA_INCU_YN": "N", "FID_TIME_INTERVAL": "5"
+            # 공식 예제 기준 세팅
+            "FID_ETC_CLS_CODE": "00",        # 기타 분류 코드(주식/ETF/ETN: 00)
+            "FID_COND_MRKT_DIV_CODE": "J",   # J: 주식/ETF/ETN
+            "FID_INPUT_ISCD": symbol,        # 종목코드 (6자리)
+            "FID_INPUT_HOUR_1": now_hms,     # 기준 시간 (HHMMSS)
+            "FID_PW_DATA_INCU_YN": "N",      # 과거 데이터 포함 여부 (당일만이면 N)
+            "FID_TIME_INTERVAL": "5",        # 5분봉
         }
-        res = requests.get(url, headers=headers, params=params)
+
         try:
-            data = res.json()
-            if data.get("rt_cd") != "0": return pd.DataFrame()
-            df = pd.DataFrame(data["output2"])
+            res = requests.get(url, headers=headers, params=params)
+
+            # ✅ 1차: HTTP 레벨 에러 체크
+            if res.status_code != 200:
+                self.log(
+                    f"❌ [KR 5분봉 HTTP에러] {symbol} "
+                    f"status={res.status_code} body={res.text[:200]}"
+                )
+                return pd.DataFrame()
+
+            # ✅ 2차: JSON 파싱
+            try:
+                data = res.json()
+            except Exception as e:
+                self.log(
+                    f"❌ [KR 5분봉 JSON파싱 실패] {symbol} "
+                    f"status={res.status_code} err={e} body={res.text[:200]}"
+                )
+                return pd.DataFrame()
+
+            rt_cd = data.get("rt_cd", "")
+            msg1 = data.get("msg1", "")
+
+            # ✅ 3차: KIS 결과 코드 확인
+            if rt_cd != "0":
+                self.log(
+                    f"⚠️ [KR 5분봉 실패] {symbol} rt_cd={rt_cd} msg1={msg1} "
+                    f"raw={str(data)[:200]}"
+                )
+                return pd.DataFrame()
+
+            candles = data.get("output2", [])
+            if not candles:
+                self.log(f"⚠️ [KR 5분봉 데이터없음] {symbol} output2 비어있음")
+                return pd.DataFrame()
+
+            # ✅ 4차: DataFrame 변환
+            df = pd.DataFrame(candles)
+            # stck_bsop_date: YYYYMMDD, stck_cntg_hour: HHMMSS
             df["datetime"] = pd.to_datetime(df["stck_bsop_date"] + df["stck_cntg_hour"])
-            df = df.rename(columns={"stck_oprc":"open", "stck_hgpr":"high", "stck_lwpr":"low", "stck_prpr":"close", "cntg_vol":"volume"})
+            df = df.rename(
+                columns={
+                    "stck_oprc": "open",
+                    "stck_hgpr": "high",
+                    "stck_lwpr": "low",
+                    "stck_prpr": "close",
+                    "cntg_vol": "volume",
+                }
+            )
             df.set_index("datetime", inplace=True)
-            df = df[["open", "high", "low", "close", "volume"]].apply(pd.to_numeric, errors='coerce').dropna()
+
+            df = df[["open", "high", "low", "close", "volume"]].apply(
+                pd.to_numeric, errors="coerce"
+            ).dropna()
+
             df = df.sort_index()
-            return df.iloc[-count:] if len(df) > count else df
-        except:
+
+            if len(df) > count:
+                df = df.iloc[-count:]
+
+            return df
+
+        except Exception as e:
+            self.log(f"❌ [KR 5분봉 예외] {symbol} | {e}")
             return pd.DataFrame()
     
     # ========================
     # ② 해외 5분봉 OHLCV (페이지네이션 적용)
     # ========================
-    def get_us_minute_ohlcv_5m(self, exchange, symbol, count=200):
+    def get_us_minute_ohlcv_5m(self, exchange, symbol, max_count=2000):
         if self.mode == "virtual":
             return pd.DataFrame()
 
         if not self.access_token:
             self.auth()
 
-        # [수정] 정규화 제거 (유저가 직접 "NASD", "NYSE" 사용)
         excd = exchange
-        
         url = f"{self.base_url}/uapi/overseas-price/v1/quotations/inquire-time-itemchartprice"
         tr_id = "HHDFS76950200"
         headers = self.get_headers(tr_id)
-        
+
         df_list = []
-        collected_count = 0
         next_key = ""
-
-        max_loops = 30
         loop_cnt = 0
+        max_loops = 50   # 너무 무한루프 안 가게
 
-        while collected_count < count and loop_cnt < max_loops:
+        while loop_cnt < max_loops:
             loop_cnt += 1
-            
+
             params = {
                 "AUTH": "",
                 "EXCD": excd,
                 "SYMB": symbol,
                 "NMIN": "5",
-                "PINC": "Y",      # 전일 포함 (필수)
+                "PINC": "Y",   # 전일까지 포함
                 "NEXT": "1" if next_key else "0",
                 "NREC": "120",
                 "FILL": "0",
-                "KEYB": next_key  # ⭐ 여기가 핵심 (이전 데이터의 마지막 시간)
+                "KEYB": next_key,
             }
-            
+
             time.sleep(0.1)
             res = requests.get(url, headers=headers, params=params)
 
             try:
                 data = res.json()
-            except Exception:
+            except Exception as e:
+                self.log(f"❌ [US 5분봉 JSON파싱 실패] {exchange} {symbol} | {e}")
                 break
 
             if res.status_code != 200 or data.get("rt_cd") != "0":
-                # 에러 로그는 남기지만, 이미 받은 데이터가 있다면 반환 시도
+                self.log(
+                    f"⚠️ [US 5분봉 실패] {exchange} {symbol} "
+                    f"status={res.status_code} rt_cd={data.get('rt_cd')} msg1={data.get('msg1')}"
+                )
                 break
 
             output2 = data.get("output2", [])
             if not output2:
+                self.log(f"⚠️ [US 5분봉 없음] {exchange} {symbol} output2 비어있음")
                 break
 
-            # 데이터 변환
             chunk = pd.DataFrame(output2)
             chunk["datetime"] = pd.to_datetime(chunk["kymd"] + chunk["khms"])
             chunk.set_index("datetime", inplace=True)
-            chunk = chunk.rename(columns={"last": "close", "evol": "volume"})
+            chunk = chunk.rename(columns={"open": "open", "high": "high", "low": "low", "last": "close", "evol": "volume"})
             chunk = chunk[["open", "high", "low", "close", "volume"]].astype(float)
-            
-            df_list.append(chunk)
-            collected_count += len(chunk)
 
-            # -----------------------------------------------------------
-            # ⭐ [중요] 다음 페이지 키 생성 로직 변경
-            # API가 주는 output1['next']는 단순히 "1"(있음) 또는 "0"(없음)일 수 있음.
-            # 다음 조회를 위해서는 '마지막 데이터의 날짜+시간'을 KEYB로 줘야 함.
-            # -----------------------------------------------------------
-            output1 = data.get("output1", {})
-            has_next = output1.get("next")  # "1" or "0"
-            
-            if has_next == "1" and len(output2) > 0:
-                # API 응답(output2)은 최신 -> 과거 순서로 옴.
-                # 따라서 리스트의 마지막 요소(-1)가 가장 과거 데이터.
-                last_row = output2[-1]
-                # KEYB 포맷: YYYYMMDDHHMMSS (초 단위까지)
-                next_key = last_row['kymd'] + last_row['khms']
+            df_list.append(chunk)
+
+            output1_list = data.get("output1", [])
+            if isinstance(output1_list, list) and len(output1_list) > 0:
+                has_next = output1_list[0].get("next")
             else:
-                # 더 이상 데이터 없음
+                has_next = None
+
+            if has_next == "1":
+                last_row = output2[-1]
+                next_key = last_row["kymd"] + last_row["khms"]
+            else:
                 break
 
         if not df_list:
             return pd.DataFrame()
 
-        # 병합 및 정렬
         df_all = pd.concat(df_list)
-        df_all = df_all[~df_all.index.duplicated(keep='first')]
+        df_all = df_all[~df_all.index.duplicated(keep="first")]
         df_all = df_all.sort_index()
 
-        if len(df_all) > count:
-            df_all = df_all.iloc[-count:]
+        # 너무 많아지면 뒷부분만
+        if len(df_all) > max_count:
+            df_all = df_all.iloc[-max_count:]
 
         return df_all
 

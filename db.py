@@ -226,29 +226,41 @@ class BotDatabase:
     # -----------------------------
     # 트레이드 / 시그널
     # -----------------------------
-    def save_trade(self, symbol, type, price, qty,
-                   profit=0, signal_id=None,
-                   ml_proba=None, entry_allowed=None):
-        try:
-            conn = sqlite3.connect(self.db_name)
-            c = conn.cursor()
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            c.execute(
-                """INSERT INTO trades
-                   (time, symbol, type, price, qty, profit,
-                    signal_id, ml_proba, entry_allowed)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    now, symbol, type, price, qty, profit,
-                    signal_id,
-                    None if ml_proba is None else float(ml_proba),
-                    None if entry_allowed is None else int(entry_allowed)
-                )
+    def save_trade(self, symbol, trade_type, price, qty, profit,
+                   ml_proba=None, extra=None, trade_time=None):
+        """
+        trade_time: 문자열 'YYYY-MM-DD HH:MM:SS' (없으면 현재시간)
+        """
+        conn = sqlite3.connect(self.db_name)
+        cur = conn.cursor()
+
+        order_no = None
+        source = None
+        if extra:
+            order_no = extra.get("order_no")
+            source = extra.get("source")
+
+        if trade_time is None:
+            # 예전처럼 지금 시간
+            cur.execute(
+                """
+                INSERT INTO trades (time, symbol, type, price, qty, profit, ml_proba, order_no, source)
+                VALUES (datetime('now','localtime'), ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (symbol, trade_type, price, qty, profit, ml_proba, order_no, source),
             )
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            self.log(f"⚠️ save_trade 실패: {e}")
+        else:
+            # 우리가 넘겨준 체결 시간 사용
+            cur.execute(
+                """
+                INSERT INTO trades (time, symbol, type, price, qty, profit, ml_proba, order_no, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (trade_time, symbol, trade_type, price, qty, profit, ml_proba, order_no, source),
+            )
+
+        conn.commit()
+        conn.close()
 
     def save_signal(self, *, region, symbol, price,
                     at_support, is_bullish, price_up,

@@ -1,5 +1,7 @@
 # web_app.py
-from flask import Flask, render_template
+from flask import Flask, render_template, jsonify, request
+import subprocess
+import os
 import sqlite3
 import pandas as pd
 import numpy as np
@@ -126,6 +128,95 @@ def load_trades_by_date(target_date: str):
         df["time"] = pd.to_datetime(df["time"])
     return df
 
+def build_round_trades(df_trades: pd.DataFrame):
+    """
+    trades 테이블에서 '포지션 단위(라운드 트립)' 요약 + 라운드별 체결 리스트 생성
+
+    반환:
+      round_trades_df, round_details_dict
+
+      - round_trades_df: 각 (symbol, round_id)별 요약 행
+      - round_details_dict: { "SYMBOL__round_id": [ {time, type, price, qty, ml_proba}, ... ] }
+    """
+    if df_trades.empty:
+        return pd.DataFrame(), {}
+
+    df = df_trades.sort_values("time").copy()
+
+    if "type" not in df.columns:
+        return pd.DataFrame(), {}
+
+    # 종목별 포지션 추적
+    def assign_round_id(group):
+        signed_qty = np.where(group["type"] == "BUY", group["qty"], -group["qty"])
+        group["signed_qty"] = signed_qty
+        group["cum_pos"] = group["signed_qty"].cumsum()
+
+        start_flags = (group["cum_pos"].shift(fill_value=0) == 0) & (group["cum_pos"] != 0)
+        group["round_id"] = start_flags.cumsum()
+        return group
+
+    df = df.groupby("symbol", group_keys=False).apply(assign_round_id)
+
+    rows = []
+    details_map = {}
+
+    for (symbol, rid), g in df.groupby(["symbol", "round_id"]):
+        if g.empty:
+            continue
+
+        status = "OPEN" if g["cum_pos"].iloc[-1] != 0 else "CLOSED"
+
+        buys = g[g["type"] == "BUY"]
+        if buys.empty:
+            continue
+
+        entry_time = buys["time"].iloc[0]
+        exit_time = g["time"].iloc[-1]
+
+        entry_qty = buys["qty"].sum()
+        entry_price = (buys["price"] * buys["qty"]).sum() / entry_qty
+
+        realized_profit_pct = g["profit"].fillna(0).sum()
+
+        round_key = f"{symbol}__{int(rid)}"
+
+        # ▼ 이 포지션에 속한 개별 체결들 리스트
+        detail_rows = []
+        for _, row in g.iterrows():
+            ml_val = None
+            if "ml_proba" in g.columns and pd.notna(row.get("ml_proba", None)):
+                ml_val = float(row["ml_proba"])
+            detail_rows.append(
+                {
+                    "time": row["time"],
+                    "type": row["type"],
+                    "price": float(row["price"]),
+                    "qty": int(row["qty"]),
+                    "ml_proba": ml_val,
+                }
+            )
+
+        details_map[round_key] = detail_rows
+
+        rows.append(
+            {
+                "symbol": symbol,
+                "round_id": int(rid),
+                "status": status,
+                "entry_time": entry_time,
+                "exit_time": exit_time,
+                "entry_qty": int(entry_qty),
+                "entry_price": float(entry_price),
+                "realized_profit_pct": float(realized_profit_pct),
+                "entry_comment": None,
+                "exit_comment": None,
+                "date": entry_time.strftime("%Y-%m-%d"),
+            }
+        )
+
+    return pd.DataFrame(rows), details_map
+
 def load_ml_signals(limit=500):
     """
     ML 점수가 찍힌 최근 신호들만 가져오는 헬퍼
@@ -151,6 +242,139 @@ def load_ml_signals(limit=500):
     # time 오름차순으로 정렬 (과거 → 최근)
     return df.sort_values("time")
 
+def sync_app_trades():
+    """
+    TODO: 여기에서 앱(모바일/웹)에서 발생한 체결 내역을 브로커/DB 등에서 읽어와서
+    trades 테이블에 INSERT 하는 로직 구현.
+    반환값: 새로 추가된 row 개수 (int)
+    """
+    return 0  # 일단 더미
+
+@app.route("/sync-app-trades", methods=["POST"])
+def sync_app_trades_route():
+    """
+    대시보드에서 버튼 누를 때마다 한번만 호출되는 엔드포인트
+    """
+    try:
+        inserted = sync_app_trades()
+        return jsonify({"ok": True, "inserted": int(inserted)})
+    except Exception as e:
+        print("sync_app_trades 오류:", e)
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/sync_app_fills", methods=["POST"])
+def sync_app_fills():
+    """
+    앱 체결내역을 trading.db로 동기화하는 라우트
+    """
+    try:
+        # import_app_fills.py 실행
+        result = subprocess.run(
+            ["python", "import_app_fills.py"],
+            capture_output=True,
+            text=True
+        )
+
+        # 에러 체크
+        if result.returncode != 0:
+            return jsonify({
+                "status": "error",
+                "message": result.stderr
+            }), 500
+
+        return jsonify({
+            "status": "ok",
+            "message": result.stdout
+        })
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    
+@app.route("/symbol_data")
+def symbol_data():
+    """
+    특정 종목의 가격 시계열 + 매매 기록(BUY/SELL)을 리턴하는 API
+    - ohlcv_data 에서 close 가격 시계열
+    - trades 에서 해당 종목의 매매 내역
+    """
+    symbol = request.args.get("symbol")
+    if not symbol:
+        return jsonify({"error": "symbol parameter required"}), 400
+
+    conn = sqlite3.connect(DB_PATH)
+
+    # 1) 캔들 데이터 (예: 5분봉, 최근 500개만)
+    candles = pd.read_sql_query(
+        """
+        SELECT dt, open, high, low, close
+        FROM ohlcv_data
+        WHERE symbol = ?
+          AND interval = '5m'
+        ORDER BY datetime(dt)
+        LIMIT 500
+        """,
+        conn,
+        params=(symbol,),
+    )
+
+    # 2) 해당 종목 매매 내역
+    trades = pd.read_sql_query(
+        """
+        SELECT time, type, price, qty
+        FROM trades
+        WHERE symbol = ?
+        ORDER BY datetime(time)
+        """,
+        conn,
+        params=(symbol,),
+    )
+
+    conn.close()
+
+    if candles.empty:
+        return jsonify({"candles": [], "trades": []})
+
+    # 시간형으로 변환
+    candles["dt"] = pd.to_datetime(candles["dt"])
+    if not trades.empty:
+        trades["time"] = pd.to_datetime(trades["time"])
+
+    # 각 트레이드를 어느 캔들 인덱스에 표시할지 계산
+    candle_times = candles["dt"].values  # numpy array
+    trade_rows = []
+    if not trades.empty:
+        for _, row in trades.iterrows():
+            tt = row["time"].to_datetime64()
+            # dt <= trade_time 인 마지막 캔들 위치
+            pos = candle_times.searchsorted(tt, side="right") - 1
+            if pos < 0 or pos >= len(candle_times):
+                continue  # 범위 밖이면 스킵
+
+            trade_rows.append(
+                {
+                    "x_index": int(pos),
+                    "time": row["time"].strftime("%Y-%m-%d %H:%M:%S"),
+                    "type": row["type"],   # "BUY" / "SELL"
+                    "price": float(row["price"]),
+                    "qty": float(row["qty"]),
+                }
+            )
+
+    return jsonify(
+        {
+            "candles": [
+                {
+                    "time": row["dt"].strftime("%Y-%m-%d %H:%M"),
+                    "open": float(row["open"]),
+                    "high": float(row["high"]),
+                    "low": float(row["low"]),
+                    "close": float(row["close"]),
+                }
+                for _, row in candles.iterrows()
+            ],
+            "trades": trade_rows,
+        }
+    )
 
 # -----------------------------
 # ML 개선안 생성 함수
@@ -254,6 +478,10 @@ def dashboard():
     universe_cov = get_universe_coverage()
     last_universe_backfill = get_last_universe_backfill_time(db=BotDatabase(DB_PATH))
     universe_failures = get_recent_backfill_failures(limit=30)
+    if not trades.empty:
+        round_trades_df, round_details = build_round_trades(trades)
+    else:
+        round_trades_df, round_details = pd.DataFrame(), {}
 
     # ✅ 카드용 숫자들 미리 계산
     if not universe_cov.empty:
@@ -274,6 +502,7 @@ def dashboard():
     }
     equity_curve = []
     symbols_avg = []
+    daily_summaries = []
 
     if not trades.empty:
         trades_sorted = trades.sort_values("time").copy()
@@ -305,6 +534,26 @@ def dashboard():
             {"symbol": s, "avg_profit": float(p)}
             for s, p in by_symbol.items()
         ]
+        tmp = trades_sorted.copy()
+        tmp["date"] = tmp["time"].dt.strftime("%Y-%m-%d")
+
+        daily_summaries = []
+        for d, df_day in tmp.groupby("date"):
+            n = len(df_day)
+            wins_day = (df_day["profit"] > 0).sum()
+            win_rate_day = (wins_day / n * 100) if n > 0 else 0.0
+            avg_profit_day = df_day["profit"].mean() if n > 0 else 0.0
+            cum_ret_day = (1 + df_day["profit"] / 100).prod() - 1
+
+            daily_summaries.append({
+                "date": d,
+                "total_trades": int(n),
+                "win_rate": round(win_rate_day, 2),
+                "avg_profit": round(avg_profit_day, 2),
+                "cum_return_pct": round(cum_ret_day * 100, 2),
+            })
+
+        daily_summaries.sort(key=lambda x: x["date"], reverse=True)
 
     logs_recent = logs.head(200) if not logs.empty else pd.DataFrame()
 
@@ -361,6 +610,22 @@ def dashboard():
             )
         ]
 
+    # 종목 드롭다운용: trades 또는 ohlcv_data 에 데이터가 있는 심볼 목록
+    conn = sqlite3.connect(DB_PATH)
+    df_sym_trades = pd.read_sql_query(
+        "SELECT DISTINCT symbol FROM trades ORDER BY symbol", conn
+    )
+    df_sym_ohlcv = pd.read_sql_query(
+        "SELECT DISTINCT symbol FROM ohlcv_data ORDER BY symbol", conn
+    )
+    conn.close()
+
+    symbols_with_data = sorted(
+        set(df_sym_trades["symbol"].tolist()) |
+        set(df_sym_ohlcv["symbol"].tolist())
+    )
+    
+
     return render_template(
         "dashboard.html",
         summary=summary,
@@ -381,6 +646,10 @@ def dashboard():
         ml_hist_labels=ml_hist_labels,
         ml_hist_counts=ml_hist_counts,
         ml_time_series=ml_time_series,
+        round_trades=round_trades_df.to_dict(orient="records") if not round_trades_df.empty else [],
+        round_details=round_details,
+        daily_summaries=daily_summaries,
+        symbols_with_data=symbols_with_data,
     )
 
 
