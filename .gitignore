@@ -1,5 +1,6 @@
 models/
 models_coin/
+models_us/
 trading.db
 *.dbg
 

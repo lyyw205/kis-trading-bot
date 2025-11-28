@@ -351,3 +351,5 @@ class BithumbDataFetcher:
         except Exception as e:
             self.log(f"❌ [BITHUMB OHLCV 조회 실패] {market} | {e}")
             return None
+
+

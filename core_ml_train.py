@@ -10,12 +10,15 @@
   - model_setting_key (settings에 저장할 키 이름)
 
 - 출력:
-  - 모델 파일 저장
+  - 모델 파일(.pkl) 저장
+  - 같은 이름의 메타데이터(.meta.json) 저장  ⭐ NEW
   - models 테이블 버전 기록
   - settings.<model_setting_key> 갱신
 """
 
 import os
+import json        # ⭐ NEW
+import hashlib     # ⭐ NEW
 import sqlite3
 from datetime import datetime
 
@@ -30,6 +33,18 @@ from db_manager import BotDatabase
 from ml_features import SEQ_LEN, build_feature_from_seq  # 공통 모듈
 
 DB_PATH = "trading.db"
+
+
+# -----------------------------------------------------------
+# 0) 설정 해시 유틸  ⭐ NEW
+# -----------------------------------------------------------
+def make_config_hash(cfg: dict) -> str:
+    """
+    학습 설정 dict를 기준으로 짧은 해시 생성
+    - cfg 내용을 json으로 정렬 직렬화한 뒤 sha256 → 앞 10자리 사용
+    """
+    cfg_json = json.dumps(cfg, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(cfg_json.encode("utf-8")).hexdigest()[:10]
 
 
 # -----------------------------------------------------------
@@ -88,6 +103,7 @@ def train_seq_model_for_universe(
     model_setting_key: str,
     note_prefix: str = "",
     model_dir: str = "models",
+    extra_config: dict | None = None,   # ⭐ NEW: 룰/버전 정보 넣을 수 있는 확장 필드
 ):
     """
     하나의 유니버스(KR / US / CR)에 대해 모델을 학습하고 저장하는 공통 함수.
@@ -97,6 +113,7 @@ def train_seq_model_for_universe(
     - model_setting_key: settings에 저장할 키 (예: active_model_path_kr)
     - note_prefix: 로그/파일명에 붙일 접두어 (예: "[KR_STOCK] ")
     - model_dir: 모델 저장 디렉토리
+    - extra_config: 엔트리 룰 버전 등 추가 메타데이터 dict (예: {"entry_rule": "CR_ENTRY_V2"})
     """
     os.makedirs(model_dir, exist_ok=True)
     db = BotDatabase(DB_PATH)
@@ -209,14 +226,16 @@ def train_seq_model_for_universe(
     )
 
     # 5) 모델 학습 (필요하면 자산군별로 파라미터 다르게 넣어도 됨)
-    model = RandomForestClassifier(
-        n_estimators=300,
-        max_depth=None,
-        min_samples_split=5,
-        min_samples_leaf=3,
-        random_state=42,
-        n_jobs=-1,
-    )
+    rf_params = {   # ⭐ NEW: config에 같이 넣기 위해 dict로 빼둠
+        "n_estimators": 300,
+        "max_depth": None,
+        "min_samples_split": 5,
+        "min_samples_leaf": 3,
+        "random_state": 42,
+        "n_jobs": -1,
+    }
+
+    model = RandomForestClassifier(**rf_params)
     model.fit(X_train, y_train)
 
     # 6) 평가
@@ -241,11 +260,56 @@ def train_seq_model_for_universe(
 
     model_path = os.path.join(model_dir, model_filename)
 
-    # 8) 모델 저장
+    # -------------------------------------------------------
+    # 7-1) 학습 설정 메타데이터 구성 + 해시 생성  ⭐ NEW
+    # -------------------------------------------------------
+    # universe에서 (region, symbol)만 간단히 가져와서 기록
+    uni_list = sorted({(u["region"], u["symbol"]) for u in universe})
+
+    train_config = {
+        "project": "kis-trading-bot",
+        "region_filter": region_filter,
+        "model_setting_key": model_setting_key,
+        "seq_len": SEQ_LEN,
+        "rf_params": rf_params,
+        "universe_size": len(uni_list),
+        "universe_sample": uni_list[:50],  # 너무 길어지지 않게 앞 50개까지만
+        "sample_table": "ml_seq_samples",
+        "ohlcv_table": "ohlcv_data",
+        "created_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    # 외부에서 넘겨준 룰/전략 버전 정보 병합 (엔트리/익절/손절 룰 등)
+    if extra_config:
+        train_config.update(extra_config)
+
+    config_hash = make_config_hash(train_config)
+
+    # 8) 모델 저장 (기존과 동일: 순수 모델만 pkl에 저장)
     joblib.dump(model, model_path)
     print(f"{note_prefix} 모델 저장 완료: {model_path}")
+    print(f"{note_prefix} CONFIG_HASH: {config_hash}")
+
+    # 8-1) 메타데이터 JSON 저장  ⭐ NEW
+    meta_path = model_path.replace(".pkl", ".meta.json")
+    meta = {
+        "model_path": model_path,
+        "config": train_config,
+        "config_hash": config_hash,
+        "n_samples": int(len(X)),
+        "val_accuracy": accuracy,
+    }
+
+    try:
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        print(f"{note_prefix} 메타데이터 저장 완료: {meta_path}")
+    except Exception as e:
+        print(f"{note_prefix} 메타데이터 저장 실패: {e}")
 
     note_text = f"{note_prefix}region={region_filter}" if region_filter else note_prefix
+    note_text = f"{note_text} cfg={config_hash}"  # ⭐ NEW: note에 해시도 남겨두기
+
     # 9) models 테이블에 버전 기록
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -276,6 +340,10 @@ def train_seq_model_for_universe(
     except Exception as e:
         db.log(f"{note_prefix} {model_setting_key} 갱신 실패: {e}")
 
-    db.log(f"{note_prefix}✅ 시퀀스 기반 ML 모델 학습/저장 완료 (accuracy={accuracy:.4f})")
+    db.log(
+        f"{note_prefix}✅ 시퀀스 기반 ML 모델 학습/저장 완료 "
+        f"(accuracy={accuracy:.4f}, cfg={config_hash})"
+    )
 
+    # 리턴 형태는 기존과 동일하게 유지
     return model_path, accuracy, len(X)

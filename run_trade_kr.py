@@ -1,5 +1,5 @@
 # run_kr_trade.py
-from core_trade import run_realtime_bot
+from core_trade_runner import run_realtime_bot
 
 if __name__ == "__main__":
     # 한국 주식만

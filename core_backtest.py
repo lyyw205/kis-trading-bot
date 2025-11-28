@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 import joblib
 from numpy.lib.stride_tricks import sliding_window_view
-
+from st_exit_cr import decide_exit_coin
 from db_manager import BotDatabase
 
 DB_PATH = "trading.db"
@@ -145,6 +145,89 @@ def build_features_for_symbol(df: pd.DataFrame):
 
     return feats, entry_indices, entry_prices
 
+def simulate_coin_trade_with_exit_logic(
+    df: pd.DataFrame,
+    entry_idx: int,
+    entry_price: float,
+) -> tuple[float, datetime]:
+    """
+    코인 스캘핑 전용 청산 로직(decide_exit_coin)을 사용해서
+    '실제 실시간처럼' 한 트레이드를 시뮬레이션한다.
+
+    - df: 해당 심볼의 5분봉 OHLCV (index: datetime, col: open/high/low/close/volume)
+    - entry_idx: 진입 시점 인덱스 (df.index 기반 위치)
+    - entry_price: 진입 가격
+
+    반환:
+      realized_pnl: 최종 실현 수익률 (소수, 0.003 = 0.3%)
+      exit_time: 최종 청산 시각
+    """
+    close_arr = df["close"].to_numpy(dtype=float)
+    index_arr = df.index.to_pydatetime()
+
+    T = len(df)
+    if entry_idx + 1 >= T:
+        # 진입 직후에 더 이상 캔들이 없으면 트레이드 무효
+        return 0.0, index_arr[entry_idx]
+
+    # 백테스트에서는 "1단위 포지션"으로 가정
+    qty = 1.0
+    qty_remain = qty
+    realized_pnl = 0.0
+
+    # 초기 상태
+    entry_time = index_arr[entry_idx]
+    state = {
+        "tp1": False,
+        "tp2": False,
+        "entry_time": entry_time,
+        "max_profit": 0.0,
+    }
+
+    # 진입 후 다음 캔들부터 순회
+    for i in range(entry_idx + 1, T):
+        now = index_arr[i]
+        price = close_arr[i]
+
+        # 현재 잔여 수량에 대해 exit 로직 적용
+        sell_qty, sell_type, new_state, profit_rate, elapsed_min = decide_exit_coin(
+            symbol="",  # 백테스트에선 굳이 심볼 안 써도 됨
+            price=price,
+            avg_price=entry_price,   # 부분 익절 후에도 entry_price 기준으로 계산 (단순화)
+            qty=qty_remain,
+            state=state,
+            now=now,
+        )
+
+        state = new_state
+
+        if sell_qty > 0:
+            # 부분 익절/손절에 대해 실현 수익률 누적
+            portion = sell_qty / qty
+            realized_pnl += profit_rate * portion
+            qty_remain -= sell_qty
+
+            # delete 플래그 또는 잔여 0이면 트레이드 종료
+            if new_state.get("delete", False) or qty_remain <= 0:
+                return realized_pnl, now
+
+        # 안전장치: 너무 오래 끌리면 마지막 가격 기준으로 청산
+        # (decide_exit_coin 안에서 TIMEOUT_12min가 있으므로 실제로는 그 전에 끝날 확률이 높음)
+        if elapsed_min >= 60:
+            # 남은 수량 전부 마지막 가격으로 정산
+            if qty_remain > 0:
+                final_pnl = (price - entry_price) / entry_price
+                realized_pnl += final_pnl * (qty_remain / qty)
+                qty_remain = 0.0
+            return realized_pnl, now
+
+    # 루프 끝까지 왔는데도 안 팔렸다면, 마지막 캔들에서 강제 청산
+    last_price = close_arr[-1]
+    last_time = index_arr[-1]
+    if qty_remain > 0:
+        final_pnl = (last_price - entry_price) / entry_price
+        realized_pnl += final_pnl * (qty_remain / qty)
+    return realized_pnl, last_time
 
 # -------------------------------------------------------
 # 라벨 계산 - numpy 버전 (TP/SL 순서 고려)
@@ -235,7 +318,7 @@ def run_backtest_for_universe(
         preds = np.asarray(preds)
 
         close_arr = df["close"].to_numpy(dtype=float)
-        index_arr = df.index.to_numpy()
+        index_arr = df.index.to_pydatetime()
 
         trade_count = 0
 
@@ -246,6 +329,32 @@ def run_backtest_for_universe(
             entry_price = float(entry_prices[idx_in_batch])
             entry_time = index_arr[entry_idx]
 
+            # -----------------------------
+            # ✅ 코인(CR): 실전용 exit 로직으로 시뮬레이션
+            # -----------------------------
+            if region == "CR":
+                realized_pnl, exit_time = simulate_coin_trade_with_exit_logic(
+                    df=df,
+                    entry_idx=entry_idx,
+                    entry_price=entry_price,
+                )
+
+                rows.append(
+                    {
+                        "region": region,
+                        "symbol": symbol,
+                        "entry_time": entry_time,
+                        "entry_price": entry_price,
+                        "label": int(realized_pnl > 0),  # 수익이면 1, 손실/보합이면 0
+                        "pnl": float(realized_pnl),
+                    }
+                )
+                trade_count += 1
+                continue  # 코인은 여기서 끝, 아래 주식 로직은 스킵
+
+            # -----------------------------
+            # 🟦 주식(KR/US): 기존 TP/SL FUTURE_WINDOW 방식 유지
+            # -----------------------------
             start = entry_idx + 1
             end = entry_idx + 1 + FUTURE_WINDOW
             future_prices = close_arr[start:end]

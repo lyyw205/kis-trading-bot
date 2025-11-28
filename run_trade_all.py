@@ -1,5 +1,5 @@
 # main.py
-from core_trade import run_realtime_bot
+from core_trade_runner import run_realtime_bot
 
 if __name__ == "__main__":
     # 전체 타겟 (region 필터 없음)

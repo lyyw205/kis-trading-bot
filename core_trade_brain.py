@@ -9,7 +9,7 @@ from ai_helpers import make_entry_comment, make_exit_comment
 from ml_features import SEQ_LEN, calculate_rsi, build_feature_from_seq
 from st_entry_kr import make_entry_signal_kr
 from st_entry_us import make_entry_signal_us
-from st_entry_coin import make_entry_signal_coin
+from st_entry_cr import make_entry_signal_coin
 from st_exit_common import decide_exit
 
 

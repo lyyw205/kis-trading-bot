@@ -8,9 +8,8 @@ import pandas as pd
 
 from ai_helpers import make_entry_comment, make_exit_comment
 from ml_features import SEQ_LEN, build_feature_from_seq
-from st_entry_coin import make_entry_signal_coin
-from st_exit_common import decide_exit
-
+from st_entry_cr import make_entry_signal_coin
+from st_exit_cr import decide_exit_coin
 from brk_bithumb_client import BithumbDataFetcher
 from db_manager import BotDatabase
 from config import CR_UNIVERSE_STOCKS  # [{"region": "CR", "symbol": "KRW-BTC", ...}, ...]
@@ -122,91 +121,149 @@ class CoinRealTimeTrader:
                 break
 
             region = c["region"]
-            market = c["symbol"]          # "KRW-BTC"
+            market = c["symbol"]
             price = c["current_price"]
             ml_proba = c["ml_proba"]
             signal_id = c["signal_id"]
             strategy_name = c.get("strategy_name", "UNKNOWN")
 
-            # 분할 비율은 기존 주식 로직과 비슷하게
-            buy_index = success_new
-            if buy_index == 0:
-                min_ratio, max_ratio = 0.30, 0.40
-            elif buy_index == 1:
-                min_ratio, max_ratio = 0.40, 0.60
-            else:
-                min_ratio, max_ratio = 1.0, 1.0
-            ratio = (min_ratio + max_ratio) / 2.0
-
-            # 코인은 KRW 기준
             if available_krw <= 0:
+                self.db.log(f"⚠️ [COIN잔액없음] {market} 더 이상 사용 가능 KRW 없음")
+                break
+
+            # 1) 마켓 주문 가능 정보 조회 (지금 준 API 사용)
+            try:
+                chance = self.fetcher.get_order_chance(market)  # <-- 이 API 호출
+            except Exception as e:
+                self.db.log(f"❌ [COIN chance 조회 실패] {market} | {e}")
+                slots_left -= 1
                 continue
 
-            budget = available_krw * ratio
-            if budget < self.min_order_amount_krw:
+            market_info = chance["market"]
+            bid_info = chance["bid_account"]
+
+            order_types = market_info.get("order_types", [])
+            bid_types = market_info.get("bid_types", [])
+            bid_constraints = market_info.get("bid", {})
+
+            min_total = float(bid_constraints.get("min_total", "0"))
+            # 이 API 기준 최소 매수 금액
+            exchange_balance = float(bid_info.get("balance", "0"))
+
+            # 2) 우리가 실제로 쓸 수 있는 최대 예산 계산
+            raw_budget = min(available_krw, exchange_balance)
+            if raw_budget <= 0:
+                self.db.log(f"⚠️ [COIN잔액없음] {market} 주문가능 KRW=0")
+                slots_left -= 1
+                continue
+
+            safety_factor = 0.98
+            budget = raw_budget * safety_factor
+
+            effective_min = max(self.min_order_amount_krw, min_total)
+            if budget < effective_min:
                 self.db.log(
-                    f"⚠️ [COIN금액컷] {market} Budget={budget:.0f}원 (< {self.min_order_amount_krw}원)"
+                    f"⚠️ [COIN금액컷] {market} budget={budget:.0f}원 "
+                    f"(< effective_min={effective_min:.0f}원)"
                 )
+                slots_left -= 1
                 continue
 
+            # 3) 기본은 'limit' 사용
+            use_limit = "limit" in bid_types
+            use_price = "price" in bid_types  # 이 타입이 있으면 금액 기준 주문 방식
+
+            # volume은 limit 주문에 필요
             volume = budget / price
             amount = volume * price
 
-            if volume <= 0 or amount < self.min_order_amount_krw:
+            if volume <= 0 or amount < effective_min:
                 self.db.log(
                     f"⚠️ [COIN수량컷] {market} volume={volume:.6f}, amount={amount:.0f}원"
                 )
+                slots_left -= 1
                 continue
 
-            # 실제 주문 보내기 (빗썸: 매수 side='bid')
-            success = self.fetcher.send_coin_order(
-                market=market,
-                side="bid",
-                volume=volume,
-                price=None,        # 시장가 매수라면 price=None + ord_type="market"
-                ord_type="market",
+            success = False
+
+            # 3-1) limit 주문 가능하면 지정가 먼저
+            if use_limit:
+                success = self.fetcher.send_coin_order(
+                    market=market,
+                    side="bid",
+                    volume=volume,
+                    price=price,
+                    ord_type="limit",
+                )
+
+            # 3-2) limit 안 되거나 실패했고, price 타입 지원하면 금액 기준 주문
+            if (not success) and use_price:
+                krw_budget = int(budget)
+                if krw_budget < effective_min:
+                    self.db.log(
+                        f"⚠️ [COIN금액컷(price)] {market} KRW={krw_budget}원 "
+                        f"(< {effective_min}원)"
+                    )
+                    success = False
+                else:
+                    # volume 없이, KRW 금액만 보내는 방식
+                    success = self.fetcher.send_coin_order(
+                        market=market,
+                        side="bid",
+                        volume=None,
+                        price=krw_budget,
+                        ord_type="price",
+                    )
+                    amount = krw_budget
+                    volume = amount / price  # 대략적인 수량 추정(로그/DB용)
+
+            # 3-3) 양쪽 다 실패하면 스킵
+            if not success:
+                self.db.log(
+                    f"❌ [COIN주문실패] {market} 지원 주문 방식/금액 조건 불만족, 매수 스킵"
+                )
+                slots_left -= 1
+                continue
+
+            # 여기까지 왔으면 주문 성공
+            available_krw -= amount
+            slots_left -= 1
+            total_held += 1
+            success_new += 1
+
+            trade_id = self.db.save_trade(
+                market,
+                "BUY",
+                price,
+                volume,
+                0,
+                signal_id=signal_id,
+                ml_proba=ml_proba,
+                entry_allowed=True,
+                region=region
             )
 
-            if success:
-                available_krw -= amount
-                slots_left -= 1
-                total_held += 1
-                success_new += 1
+            self.db.log(
+                f"✅🚀[COIN매수] {market} {volume:.6f} | ML:{ml_proba:.3f} "
+                f"| 약 {amount:,.0f}원 (남은 KRW: {available_krw:,.0f})"
+            )
 
-                # trade 기록 (profit=0, 향후 청산시 계산)
-                trade_id = self.db.save_trade(
-                    market,
-                    "BUY",
-                    price,
-                    volume,
-                    0,
-                    signal_id=signal_id,
-                    ml_proba=ml_proba,
-                    entry_allowed=True,
-                    region=region
-                )
-
-                self.db.log(
-                    f"✅🚀[COIN매수] {market} {volume:.6f} | ML:{ml_proba:.3f} | 약 {amount:,.0f}원"
-                )
-
-                # AI 진입 코멘트
-                try:
-                    entry_ctx = {
-                        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "region": region,
-                        "symbol": market,
-                        "exchange": "BITHUMB",
-                        "side": "BUY",
-                        "qty": volume,
-                        "price": float(price),
-                        "ml_proba": ml_proba,
-                        "strategy": strategy_name,
-                    }
-                    comment = make_entry_comment(entry_ctx)
-                    self.db.update_trade_entry_comment(trade_id, comment)
-                except Exception as e:
-                    self.db.log(f"⚠️ [COIN AI진입코멘트 실패] {market} | {e}")
+            try:
+                entry_ctx = {
+                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "region": region,
+                    "symbol": market,
+                    "exchange": "BITHUMB",
+                    "side": "BUY",
+                    "qty": volume,
+                    "price": float(price),
+                    "ml_proba": ml_proba,
+                    "strategy": strategy_name,
+                }
+                comment = make_entry_comment(entry_ctx)
+                self.db.update_trade_entry_comment(trade_id, comment)
+            except Exception as e:
+                self.db.log(f"⚠️ [COIN AI진입코멘트 실패] {market} | {e}")
 
     # ------------------------------------------------
     # 메인 체크 루프 (주식 trader.run_check 와 비슷한 구조)
@@ -366,7 +423,7 @@ class CoinRealTimeTrader:
 
                 now = datetime.utcnow()
 
-                sell_qty, sell_type, new_state, profit_rate, elapsed_min = decide_exit(
+                sell_qty, sell_type, new_state, profit_rate, elapsed_min = decide_exit_coin(
                     symbol=market,
                     region=region,
                     price=price,

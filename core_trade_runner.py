@@ -170,7 +170,7 @@ def run_realtime_kis_bot(region: Optional[str] = None):
     db.log(f"🔍 [DEBUG] KIS 모드: {MODE}")
 
     # 3) ML 모델 로드
-    model = load_active_model(db)
+    model = load_active_model(db, for_region=region)
 
     # 4) ML threshold 로드
     ml_threshold = load_ml_threshold(db, default=0.55)

@@ -9,7 +9,7 @@ import pandas as pd
 from config import KR_UNIVERSE_STOCKS, US_UNIVERSE_STOCKS, CR_UNIVERSE_STOCKS
 from db_manager import BotDatabase
 from st_entry_common import add_common_entry_columns
-from st_entry_coin import make_entry_signal_coin  # ✅ CR 전용 엔트리 추가
+from st_entry_cr import make_entry_signal_coin  # ✅ CR 전용 엔트리 추가
 from ml_features import SEQ_LEN
 
 DB_PATH = "trading.db"
