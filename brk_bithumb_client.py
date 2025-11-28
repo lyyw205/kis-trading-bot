@@ -1,4 +1,3 @@
-# brk_bithumb_client.py
 """
 빗썸(Bithumb) 전용 브로커 클라이언트
 
@@ -8,10 +7,8 @@
     * [PUBLIC] 일(Day) 캔들:      GET /v1/candles/days
     * [PUBLIC] 현재가 정보:       GET /v1/ticker
     * [PRIVATE] 전체 계좌 조회:   GET /v1/accounts
+    * [PRIVATE] 주문 가능 정보:   GET /v1/orders/chance
     * [PRIVATE] 주문하기:        POST /v1/orders
-
-- 이 클래스는 UpbitDataFetcher와 비슷한 느낌으로 설계되어 있고,
-  코인 자산군(region="CR") 전용으로 사용할 수 있게 구성함.
 """
 
 import os
@@ -20,6 +17,7 @@ import uuid
 import hashlib
 from typing import Dict, Any, Optional
 from urllib.parse import urlencode
+
 import requests
 import pandas as pd
 import jwt  # pip install pyjwt
@@ -63,27 +61,27 @@ class BithumbDataFetcher:
     #       access_key, nonce(UUID), timestamp(ms)
     #       (+ query_hash, query_hash_alg=SHA512)
     # --------------------------------------------------
-    def _make_auth_headers(self, body: dict | None = None) -> dict:
+    def _make_auth_headers(self, params_or_body: dict | None = None) -> dict:
         """
         빗썸 API 2.0 JWT 인증 헤더 생성
-        - body가 있으면: body를 query string으로 인코딩 → SHA512 해시 → query_hash / query_hash_alg 포함
-        - body가 없으면: access_key, nonce, timestamp만 포함
+
+        - params_or_body 가 있으면:
+          - dict를 query string 형태로 인코딩
+          - SHA512(query) → query_hash, query_hash_alg 포함
+        - 없으면: access_key, nonce, timestamp만 포함
         """
         if not self.access_key or not self.secret_key:
             raise ValueError("BITHUMB_ACCESS_KEY / BITHUMB_SECRET_KEY 가 설정되어 있지 않습니다.")
 
-        # 1) 기본 페이로드
         payload: dict = {
             "access_key": self.access_key,
-            "nonce": str(uuid.uuid4()),                 # 무작위 UUID
-            "timestamp": round(time.time() * 1000),     # ms 단위 타임스탬프
+            "nonce": str(uuid.uuid4()),
+            "timestamp": round(time.time() * 1000),
         }
 
-        # 2) body가 있을 경우 → query string 해시(SHA512)
-        if body:
-            # 예: {"order_currency": "BTC", "payment_currency": "KRW", ...}
-            query: bytes = urlencode(body).encode()     # key1=val1&key2=val2...
-
+        if params_or_body:
+            # key1=val1&key2=val2...
+            query: bytes = urlencode(params_or_body, doseq=True).encode()
             h = hashlib.sha512()
             h.update(query)
             query_hash = h.hexdigest()
@@ -91,14 +89,12 @@ class BithumbDataFetcher:
             payload["query_hash"] = query_hash
             payload["query_hash_alg"] = "SHA512"
 
-        # 3) JWT 생성 (HS256, secret_key로 서명)
         jwt_token = jwt.encode(
             payload,
             self.secret_key,
-            algorithm="HS256",        # 문서에서 권장하는 알고리즘
+            algorithm="HS256",
         )
 
-        # 4) Authorization 헤더로 포함
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {jwt_token}",
@@ -106,9 +102,37 @@ class BithumbDataFetcher:
         return headers
 
     # --------------------------------------------------
+    # 주문 가능 정보 (GET /v1/orders/chance)
+    # --------------------------------------------------
+    def get_order_chance(self, market: str) -> Dict[str, Any]:
+        """
+        빗썸 '주문 가능 정보' 조회
+        - endpoint: GET /v1/orders/chance
+        - param: market (예: "KRW-BTC")
+        """
+        url = f"{self.base_url}/v1/orders/chance"
+        params = {"market": market}
+
+        # 쿼리 파라미터를 JWT query_hash에 포함해야 하므로 params로 서명
+        headers = self._make_auth_headers(params)
+
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=5)
+            data = resp.json()
+        except Exception as e:
+            self.log(f"❌ [BITHUMB chance 조회 예외] {market} | {e}")
+            raise
+
+        if resp.status_code != 200:
+            # v2.0 에러는 body 안에 에러 정보가 들어옴
+            self.log(f"❌ [BITHUMB chance 조회 실패] status={resp.status_code}, body={data}")
+            raise RuntimeError(f"chance 조회 실패: {data}")
+
+        return data
+
+    # --------------------------------------------------
     # 계좌 / 잔고
     #   - [API 2.0] PRIVATE: 전체 계좌 조회 GET /v1/accounts
-    #   - 응답: [{currency, balance, locked, avg_buy_price, unit_currency, ...}, ...]
     # --------------------------------------------------
     def get_coin_balance(self) -> Dict[str, Dict[str, float]]:
         """
@@ -116,8 +140,8 @@ class BithumbDataFetcher:
 
         반환 예시:
         {
-        "KRW-BTC": {"qty": 0.01, "avg_price": 95000000.0},
-        "KRW-ETH": {"qty": 0.3,  "avg_price": 3800000.0},
+          "KRW-BTC": {"qty": 0.01, "avg_price": 95000000.0},
+          "KRW-ETH": {"qty": 0.3,  "avg_price": 3800000.0},
         }
         """
         url = f"{self.base_url}/v1/accounts"
@@ -137,18 +161,15 @@ class BithumbDataFetcher:
             currency = item["currency"]          # "BTC", "ETH", "KRW", "POINT" 등
             balance = float(item["balance"])
 
-            # 1) KRW / 포인트 계정은 코인 보유 개수에서 제외
+            # KRW / 포인트 계정은 코인 보유 개수에서 제외
             if currency in ("KRW", "POINT"):
                 continue
 
-            # 2) 잔고 0 이하(혹은 먼지 수준)는 제외
+            # 먼지 수준 제외 (필요시 임계값 조정 가능)
             if balance <= 300:
                 continue
 
-            # 빗썸 평균 매수가 (없으면 0.0)
             avg_price = float(item.get("avg_buy_price") or 0.0)
-
-            # 우리 쪽에서 쓰는 마켓 형식으로 변환
             market = f"KRW-{currency}"
 
             balances[market] = {
@@ -161,7 +182,6 @@ class BithumbDataFetcher:
     def get_coin_buyable_cash(self) -> float:
         """
         코인 매수 가능 KRW (빗썸)
-
         - 전체 계좌 조회 결과에서 currency == "KRW" 항목의 balance 사용
         """
         url = f"{self.base_url}/v1/accounts"
@@ -187,7 +207,7 @@ class BithumbDataFetcher:
     # --------------------------------------------------
     # 주문
     #   - [API 2.0] PRIVATE: 주문하기 POST /v1/orders
-    #   - body 필드 (문서 기준): market, side, volume, price, ord_type ...
+    #   - docs: market, side, order_type, price, volume
     # --------------------------------------------------
     def send_coin_order(
         self,
@@ -195,31 +215,34 @@ class BithumbDataFetcher:
         side: str,
         volume: float | None = None,
         price: float | None = None,
-        ord_type: str = "limit",  # "limit" / "market" 등 실제 빗썸 스펙에 맞게
-    ) -> bool:
+        ord_type: str = "limit",  # "limit" / "price" / "market"
+    ) -> str | None:
         """
         빗썸 코인 주문
-        - market: "KRW-BTC" 같은 마켓 코드
-        - side: "bid"(매수) / "ask"(매도)
-        - volume: 수량
-        - price: 가격 (지정가인 경우)
-        """
 
-        # 🔹 빗썸 주문 엔드포인트 (공식 레퍼런스 보고 정확한 path로 바꿔줘)
+        - market: "KRW-BTC"
+        - side: "bid"(매수) / "ask"(매도)
+        - ord_type:
+            * "limit" : 지정가 (volume + price 필수)
+            * "price" : 시장가 매수 (price = 사용할 KRW 금액, volume 생략)
+            * "market": 시장가 매도 (volume 필수, price 생략)
+
+        ✅ 성공 시 order_id (str) 반환, 실패 시 None 반환
+        """
         url = f"{self.base_url}/v1/orders"
 
-        # 빗썸이 요구하는 파라미터 이름대로 맞추기 (예시는 구조만)
         body: dict = {
             "market": market,
-            "side": side,           # "bid" / "ask"
-            "ord_type": ord_type,   # "limit" / "price" / "market"
+            "side": side,
+            "ord_type": ord_type,
         }
+
         if volume is not None:
-            body["volume"] = str(volume)     # 문자열로 보내는 게 안전
-        if price is not None and ord_type == "limit":
+            body["volume"] = str(volume)
+
+        if price is not None:
             body["price"] = str(price)
 
-        # ✅ JWT 인증 헤더 생성 (요청 body 기반으로 query_hash까지 포함)
         headers = self._make_auth_headers(body)
 
         try:
@@ -227,22 +250,58 @@ class BithumbDataFetcher:
             data = resp.json()
         except Exception as e:
             self.log(f"❌ [BITHUMB 주문 예외] {market} {side} | {e}")
+            return None
+
+        if resp.status_code in (200, 201):
+            order_id = data.get("uuid") # v2는 uuid로 줍니다
+            if order_id:
+                self.log(f"✅ [BITHUMB 주문 성공] {market} {side} | ID={order_id}")
+                return str(order_id)
+            
+            # 가끔 성공했지만 uuid가 없는 경우 대비
+            self.log(f"⚠️ [BITHUMB 주문 응답] {data}")
+            return str(data.get("order_id", "")) # 구버전 호환용
+            
+        else:
+            # 에러 메시지 상세 확인
+            error_info = data.get("error", {})
+            msg = error_info.get("message", str(data))
+            self.log(f"❌ [BITHUMB 주문 실패] status={resp.status_code}, msg={msg}")
+            return None
+
+    def cancel_order(self, order_id: str) -> bool:
+        """
+        빗썸 주문 취소
+        - endpoint 예시: DELETE /v1/orders/{orderId}
+        - 실제 경로/필드는 공식 문서에 맞게 필요하면 미세 조정
+        """
+        url = f"{self.base_url}/v1/orders/{order_id}"
+
+        body = {"order_id": order_id}
+        headers = self._make_auth_headers(body)
+
+        try:
+            resp = requests.delete(url, headers=headers, json=body, timeout=5)
+            data = resp.json()
+        except Exception as e:
+            self.log(f"❌ [BITHUMB 주문 취소 예외] order_id={order_id} | {e}")
             return False
 
-        # 빗썸 응답 스펙에 맞게 성공/실패 체크
-        if resp.status_code in (200, 201) and not data.get("status") in ("5100", "5000"):
-            self.log(f"✅ [BITHUMB 주문 성공] {market} {side} {volume} @ {price} | resp={data}")
-            return True
+        if resp.status_code == 200:
+            # 이미 체결/취소된 주문은 에러 코드로 내려줄 수도 있음 → 로그만 보고 스킵
+            if data.get("status") in ("0000", None) or "order_id" in data:
+                self.log(f"✅ [BITHUMB 주문 취소 성공] order_id={order_id} | resp={data}")
+                return True
+
+            self.log(f"⚠️ [BITHUMB 주문 취소 응답] order_id={order_id} | body={data}")
+            return False
         else:
-            self.log(
-                f"❌ [BITHUMB 주문 실패] status={resp.status_code}, body={data}"
-            )
+            self.log(f"❌ [BITHUMB 주문 취소 실패] order_id={order_id} status={resp.status_code}, body={data}")
             return False
 
     # --------------------------------------------------
     # 시세 / 현재가
     #   - [API 2.0] PUBLIC: 현재가 정보 GET /v1/ticker
-    #   - 응답 필드: trade_price (현재가), opening_price, high_price, low_price, ...
     # --------------------------------------------------
     def get_coin_current_price(self, market: str) -> Optional[float]:
         """
@@ -251,15 +310,12 @@ class BithumbDataFetcher:
         - 빗썸 REST: /public/ticker/BTC_KRW (order_currency_payment_currency)
         """
         try:
-            # "KRW-BTC" -> ["KRW", "BTC"]
             payment_currency, order_currency = market.split("-")
         except ValueError:
             self.log(f"⚠️ [BITHUMB 현재가] 잘못된 마켓 포맷: {market}")
             return None
 
-        # 빗썸 REST 포맷: BTC_KRW
         rest_symbol = f"{order_currency}_{payment_currency}"  # ex) BTC_KRW
-
         url = f"{self.base_url}/public/ticker/{rest_symbol}"
 
         try:
@@ -273,7 +329,6 @@ class BithumbDataFetcher:
                 return None
 
             ticker = data.get("data", {})
-            # 문서상 closing_price가 종가(현재가 역할)
             price_str = ticker.get("closing_price")
 
             if price_str is None:
@@ -285,12 +340,10 @@ class BithumbDataFetcher:
         except Exception as e:
             self.log(f"❌ [BITHUMB 현재가 조회 실패] {market} | {e}")
             return None
-        
+
     # --------------------------------------------------
     # 시세 / OHLCV
-    #   - [API 2.0] PUBLIC:
-    #       * 분(Minute) 캔들: GET /v1/candles/minutes/{unit}
-    #       * 일(Day) 캔들:    GET /v1/candles/days
+    #   - [API 2.0] PUBLIC: 분(Minute) 캔들 GET /v1/candles/minutes/{unit}
     # --------------------------------------------------
     def get_coin_ohlcv(
         self,
@@ -304,7 +357,6 @@ class BithumbDataFetcher:
         - market: "KRW-BTC"
         - count: 최대 200개까지
         """
-        # "minute5" -> 5
         if interval.startswith("minute"):
             unit_str = interval.replace("minute", "")
         else:
@@ -317,9 +369,8 @@ class BithumbDataFetcher:
 
         url = f"{self.base_url}/v1/candles/minutes/{unit}"
         params = {
-            "market": market,   # ex) KRW-BTC
+            "market": market,
             "count": count,
-            # "to": 생략하면 최신 캔들 기준
         }
 
         try:
@@ -331,7 +382,6 @@ class BithumbDataFetcher:
 
             records = []
             for c in data:
-                # candle_date_time_kst: 'yyyy-MM-ddTHH:mm:ss'
                 ts = pd.to_datetime(c["candle_date_time_kst"])
                 records.append(
                     {
@@ -351,5 +401,3 @@ class BithumbDataFetcher:
         except Exception as e:
             self.log(f"❌ [BITHUMB OHLCV 조회 실패] {market} | {e}")
             return None
-
-

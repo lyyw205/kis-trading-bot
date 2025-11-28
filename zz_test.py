@@ -14,7 +14,7 @@ import pandas as pd
 import numpy as np
 
 from ml_features import SEQ_LEN
-from st_entry_coin import make_entry_signal_coin
+from st_entry_cr import make_entry_signal_coin
 
 # ✅ DB 경로 - 네 환경에 맞게 수정
 from dash_data import DB_PATH  # 이미 쓰고 있으면 이대로, 아니면 문자열로 바꿔도 됨

@@ -5,6 +5,7 @@ from typing import Dict, Any, Tuple, Optional
 
 def decide_exit_coin(
     symbol: str,
+    region: str,
     price: float,
     avg_price: float,
     qty: float,
@@ -45,14 +46,14 @@ def decide_exit_coin(
     # 1) 손절 (스캘핑 핵심: 빠른 컷)
     # ============================
     # -0.25% 손절
-    if profit_rate <= -0.0025:
-        return qty, "CUT_LOSS_-0.25%", {**state, "delete": True}, profit_rate, elapsed_min
+    if profit_rate <= -0.01:
+        return qty, "CUT_LOSS_-0.1%", {**state, "delete": True}, profit_rate, elapsed_min
 
     # ============================
     # 2) 익절 2차 (+0.6% → 전량)
     # ============================
-    if profit_rate >= 0.006 and not tp2:
-        return qty, "TP2_+0.6%", {
+    if profit_rate >= 0.015 and not tp2:
+        return qty, "TP2_+1.5%", {
             "tp1": True,
             "tp2": True,
             "entry_time": entry_time,
@@ -63,9 +64,9 @@ def decide_exit_coin(
     # ============================
     # 3) 익절 1차 (+0.3% → 50%)
     # ============================
-    if profit_rate >= 0.003 and not tp1:
+    if profit_rate >= 0.01 and not tp1:
         sell_qty = qty * 0.5
-        return sell_qty, "TP1_+0.3%", {
+        return sell_qty, "TP1_+1%", {
             "tp1": True,
             "tp2": False,
             "entry_time": now,            # 1차 익절 이후 시간 리셋
@@ -77,14 +78,14 @@ def decide_exit_coin(
     #    max_profit >= 0.005(0.5%) 찍고 → 0.002(0.2%) 이하로 밀리면 전량
     # ============================
     if tp1 and not tp2:
-        if max_profit >= 0.005 and profit_rate <= 0.002:
+        if max_profit >= 0.012 and profit_rate <= 0.008:
             return qty, "RETRACE_AFTER_TP1", {**state, "delete": True}, profit_rate, elapsed_min
 
     # ============================
     # 5) 시간 기반 종료 (스캘핑)
     #    - 진입 후 12분 유지 → 0.2% 못 넘김 → 종료
     # ============================
-    if elapsed_min >= 12 and profit_rate < 0.002:
+    if elapsed_min >= 12 and profit_rate < 0.01:
         return qty, "TIMEOUT_12min", {**state, "delete": True}, profit_rate, elapsed_min
 
     # 업데이트 후 계속 보유

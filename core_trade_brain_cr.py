@@ -1,7 +1,7 @@
 # trader_cr.py
 import time
 from datetime import datetime
-
+import math
 import joblib
 import numpy as np
 import pandas as pd
@@ -47,7 +47,7 @@ class CoinRealTimeTrader:
         self.params = params            # lookback, band_pct 등
         self.db = db
         self.trade_state = {}           # 심볼별 TP/SL 상태 저장 (st_exit_common과 호환)
-
+        self.pending_orders: dict[str, dict] = {}
         # ML 모델 (RandomForest 등)
         self.model = model
         self.ml_threshold = ml_threshold
@@ -57,6 +57,10 @@ class CoinRealTimeTrader:
 
         # 포지션 최대 개수 (코인 전용)
         self.max_pos = 3
+
+    def _truncate_qty(self, qty: float, precision: int = 4) -> float:
+        factor = 10 ** precision
+        return math.floor(qty * factor) / factor
 
     # ------------------------------------------------
     # 코인은 24시간 장이라 장 마감 체크는 간단하게
@@ -139,12 +143,12 @@ class CoinRealTimeTrader:
                 slots_left -= 1
                 continue
 
-            market_info = chance["market"]
-            bid_info = chance["bid_account"]
+            market_info = chance.get("market") or {}
+            bid_info = chance.get("bid_account") or {}
 
-            order_types = market_info.get("order_types", [])
-            bid_types = market_info.get("bid_types", [])
-            bid_constraints = market_info.get("bid", {})
+            order_types = market_info.get("order_types", []) or []
+            bid_types = market_info.get("bid_types", []) or []
+            bid_constraints = market_info.get("bid", {}) or {}
 
             min_total = float(bid_constraints.get("min_total", "0"))
             # 이 API 기준 최소 매수 금액
@@ -169,10 +173,6 @@ class CoinRealTimeTrader:
                 slots_left -= 1
                 continue
 
-            # 3) 기본은 'limit' 사용
-            use_limit = "limit" in bid_types
-            use_price = "price" in bid_types  # 이 타입이 있으면 금액 기준 주문 방식
-
             # volume은 limit 주문에 필요
             volume = budget / price
             amount = volume * price
@@ -184,41 +184,18 @@ class CoinRealTimeTrader:
                 slots_left -= 1
                 continue
 
-            success = False
-
             # 3-1) limit 주문 가능하면 지정가 먼저
-            if use_limit:
-                success = self.fetcher.send_coin_order(
-                    market=market,
-                    side="bid",
-                    volume=volume,
-                    price=price,
-                    ord_type="limit",
-                )
+            order_id = self.fetcher.send_coin_order(
+                market=market,
+                side="bid",
+                volume=volume,
+                price=price,
+                ord_type="limit",
+            )
 
-            # 3-2) limit 안 되거나 실패했고, price 타입 지원하면 금액 기준 주문
-            if (not success) and use_price:
-                krw_budget = int(budget)
-                if krw_budget < effective_min:
-                    self.db.log(
-                        f"⚠️ [COIN금액컷(price)] {market} KRW={krw_budget}원 "
-                        f"(< {effective_min}원)"
-                    )
-                    success = False
-                else:
-                    # volume 없이, KRW 금액만 보내는 방식
-                    success = self.fetcher.send_coin_order(
-                        market=market,
-                        side="bid",
-                        volume=None,
-                        price=krw_budget,
-                        ord_type="price",
-                    )
-                    amount = krw_budget
-                    volume = amount / price  # 대략적인 수량 추정(로그/DB용)
+            # limit 실패했거나 지원 안 하면 price 타입으로 재시도 (생략)
 
-            # 3-3) 양쪽 다 실패하면 스킵
-            if not success:
+            if not order_id:
                 self.db.log(
                     f"❌ [COIN주문실패] {market} 지원 주문 방식/금액 조건 불만족, 매수 스킵"
                 )
@@ -231,16 +208,23 @@ class CoinRealTimeTrader:
             total_held += 1
             success_new += 1
 
+                    # 🔹 1분 취소 대상 pending 주문으로 등록
+            self.pending_orders[market] = {
+                "order_id": order_id,
+                "created_at": datetime.utcnow(),
+                "side": "bid",
+            }
+
             trade_id = self.db.save_trade(
-                market,
-                "BUY",
-                price,
-                volume,
-                0,
+                region=region,        # 1. region
+                symbol=market,        # 2. symbol
+                trade_type="BUY",     # 3. trade_type (side 아님)
+                price=price,          # 4. price
+                qty=volume,           # 5. qty
+                profit=0,             # 6. profit (profit_pct 아님)
                 signal_id=signal_id,
                 ml_proba=ml_proba,
-                entry_allowed=True,
-                region=region
+                entry_allowed=True
             )
 
             self.db.log(
@@ -265,10 +249,62 @@ class CoinRealTimeTrader:
             except Exception as e:
                 self.db.log(f"⚠️ [COIN AI진입코멘트 실패] {market} | {e}")
 
+    def cancel_stale_orders(self, max_wait_sec: int = 30):
+        """
+        1분 이상 체결 안 된 주문 취소
+        - pending_orders 에 저장된 주문 기준
+        - 실제로는 "진짜 체결됐는지"는 모르고, 시간 기준으로만 취소 시도
+        - 이미 체결된 주문이면 거래소에서 취소 실패 리턴할 수 있지만,
+          그건 로그만 찍고 넘어간다.
+        """
+        if not self.pending_orders:
+            return
+
+        now = datetime.utcnow()
+        to_remove = []
+
+        for market, info in self.pending_orders.items():
+            order_id = info.get("order_id")
+            created_at = info.get("created_at")
+
+            if not order_id or not created_at:
+                to_remove.append(market)
+                continue
+
+            elapsed = (now - created_at).total_seconds()
+
+            if elapsed >= max_wait_sec:
+                self.db.log(
+                    f"⏱️ [COIN주문취소시도] {market} order_id={order_id} "
+                    f"대기시간={elapsed:.1f}초 (>{max_wait_sec}초)"
+                )
+                try:
+                    ok = self.fetcher.cancel_order(order_id)
+                except Exception as e:
+                    self.db.log(f"❌ [COIN주문취소예외] {market} order_id={order_id} | {e}")
+                    ok = False
+
+                if ok:
+                    self.db.log(
+                        f"✅ [COIN주문취소완료] {market} order_id={order_id}"
+                    )
+                else:
+                    self.db.log(
+                        f"⚠️ [COIN주문취소실패] {market} order_id={order_id} "
+                        f"(이미 체결/취소되었을 수 있음)"
+                    )
+
+                # 어쨌든 더 이상 이 주문은 관리하지 않음
+                to_remove.append(market)
+
+        for m in to_remove:
+            self.pending_orders.pop(m, None)
+
     # ------------------------------------------------
     # 메인 체크 루프 (주식 trader.run_check 와 비슷한 구조)
     # ------------------------------------------------
     def run_check(self):
+        self.cancel_stale_orders(max_wait_sec=30)
         # 1. 잔고 및 현금 조회 (코인 전용)
         try:
             coin_balance = self.fetcher.get_coin_balance()
@@ -408,6 +444,7 @@ class CoinRealTimeTrader:
 
             # (9) 매도/청산 로직
             if has_coin and my_info:
+                info = my_info
                 avg_price = my_info["avg_price"]
                 qty = my_info["qty"]
 
@@ -427,7 +464,7 @@ class CoinRealTimeTrader:
                     symbol=market,
                     region=region,
                     price=price,
-                    avg_price=avg_price,
+                    avg_price=info["avg_price"],
                     qty=qty,
                     state=state,
                     now=now,
@@ -452,12 +489,12 @@ class CoinRealTimeTrader:
 
                     if success:
                         trade_id = self.db.save_trade(
-                            market,
-                            sell_type,
-                            price,
-                            sell_qty,
-                            profit_rate * 100,
-                            region=region
+                            region=region,
+                            symbol=market,
+                            trade_type=sell_type,
+                            price=price,
+                            qty=sell_qty,
+                            profit=profit_rate * 100
                         )
                         self.db.log(
                             f"📉[COIN매도] {market}: {sell_type} {sell_qty:.6f} "
