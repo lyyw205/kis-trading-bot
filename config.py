@@ -2,175 +2,47 @@
 import os
 from dotenv import load_dotenv
 
+# 종목 리스트는 분리된 파일에서 가져옴
+from config_us import US_TARGET_STOCKS, US_UNIVERSE_STOCKS
+from config_kr import KR_TARGET_STOCKS, KR_UNIVERSE_STOCKS
+from config_coin import CR_TARGET_STOCKS, CR_UNIVERSE_STOCKS
+
 load_dotenv()
 
+# -----------------------------
+# 공통 KIS 설정
+# -----------------------------
 APP_KEY = os.getenv("KIS_APP_KEY")
 APP_SECRET = os.getenv("KIS_APP_SECRET")
 ACCOUNT_NO = os.getenv("KIS_ACCOUNT_NO")
-MODE = os.getenv("KIS_MODE", "virtual")
+MODE = os.getenv("KIS_MODE", "virtual")  # "real" / "virtual"
 
-
-TARGET_STOCKS = [
-    {"region": "US", "symbol": "AAPL", "excd": "NAS"},
-    {"region": "US", "symbol": "TSLA", "excd": "NAS"},
-    {"region": "US", "symbol": "MSFT", "excd": "NAS"},
-    {"region": "US", "symbol": "AMZN", "excd": "NAS"},
-    {"region": "US", "symbol": "GOOGL", "excd": "NAS"},
-    {"region": "US", "symbol": "NVDA", "excd": "NAS"},
-    {"region": "US", "symbol": "META", "excd": "NAS"},
-    {"region": "US", "symbol": "NVDA", "excd": "NAS"},
-    {"region": "US", "symbol": "TSLA", "excd": "NAS"},
-    {"region": "US", "symbol": "QQQ", "excd": "NAS"},
-    {"region": "US", "symbol": "GOOGL", "excd": "NAS"},
-    {"region": "US", "symbol": "ORCL", "excd": "NYS"},
-    {"region": "US", "symbol": "AMD", "excd": "NAS"},
-    {"region": "US", "symbol": "SPY", "excd": "NYSE"},
-    {"region": "US", "symbol": "META", "excd": "NAS"},
-    {"region": "US", "symbol": "HOOD", "excd": "NAS"},
-    {"region": "US", "symbol": "GOOG", "excd": "NAS"},
-    {"region": "US", "symbol": "AVGO", "excd": "NAS"},
-    {"region": "US", "symbol": "COIN", "excd": "NAS"},
-    {"region": "US", "symbol": "AMZN", "excd": "NAS"},
-    {"region": "US", "symbol": "MSTR", "excd": "NAS"},
-    {"region": "US", "symbol": "MU", "excd": "NAS"},
-    {"region": "US", "symbol": "SOFI", "excd": "NAS"},
-    {"region": "US", "symbol": "SNDK", "excd": "NAS"},
-    {"region": "US", "symbol": "PLTR", "excd": "NAS"},
-    {"region": "US", "symbol": "INTC", "excd": "NAS"},
-    {"region": "US", "symbol": "MSFT", "excd": "NAS"},
-    {"region": "US", "symbol": "BABA", "excd": "NYS"},
-    {"region": "US", "symbol": "CRCL", "excd": "NYS"},
-    {"region": "US", "symbol": "BMNR", "excd": "AMS"},
-    {"region": "US", "symbol": "NFLX", "excd": "NAS"},
-    {"region": "US", "symbol": "AAPL", "excd": "NAS"},
-    {"region": "US", "symbol": "IREN", "excd": "NAS"},
-    {"region": "US", "symbol": "HIMS", "excd": "NYS"},
-    {"region": "US", "symbol": "CRWV", "excd": "NAS"},
-    {"region": "US", "symbol": "ZS", "excd": "NAS"},
-    {"region": "US", "symbol": "TMC", "excd": "NAS"},
-    {"region": "US", "symbol": "OPEN", "excd": "NAS"},
-    {"region": "US", "symbol": "ADBE", "excd": "NAS"},
-    {"region": "US", "symbol": "RGTI", "excd": "NAS"},
-    {"region": "US", "symbol": "APP", "excd": "NAS"},
-    {"region": "US", "symbol": "CLSK", "excd": "NAS"},
-    {"region": "US", "symbol": "OKLO", "excd": "NYS"},
-    {"region": "US", "symbol": "QUBT", "excd": "NAS"},
-    {"region": "US", "symbol": "RDDT", "excd": "NYS"},
-    {"region": "US", "symbol": "ONDS", "excd": "NAS"},
-    {"region": "US", "symbol": "BITF", "excd": "NAS"},
-    {"region": "US", "symbol": "SGBX", "excd": "NAS"},
-    {"region": "US", "symbol": "RKLB", "excd": "NAS"},
-    {"region": "US", "symbol": "NKE", "excd": "NYS"},
-    {"region": "US", "symbol": "BA", "excd": "NYS"},
-    {"region": "US", "symbol": "QCOM", "excd": "NAS"},
-    {"region": "US", "symbol": "QBTS", "excd": "NYS"},
-    {"region": "US", "symbol": "BURU", "excd": "AMS"},
-    {"region": "US", "symbol": "INHD", "excd": "NAS"},
-    {"region": "US", "symbol": "GPUS", "excd": "AMS"},
-    {"region": "US", "symbol": "DVLT", "excd": "NAS"},
-    {"region": "US", "symbol": "LOBO", "excd": "NAS"},
-    {"region": "US", "symbol": "AIIO", "excd": "NAS"},
-    {"region": "US", "symbol": "PLUG", "excd": "NAS"},
-    {"region": "US", "symbol": "DFLI", "excd": "NAS"},
-    {"region": "US", "symbol": "ASST", "excd": "NAS"},
-    {"region": "US", "symbol": "LAES", "excd": "NAS"},
-    {"region": "US", "symbol": "FMFC", "excd": "NAS"},
-    {"region": "US", "symbol": "MSGM", "excd": "NAS"},
-    {"region": "US", "symbol": "SLDP", "excd": "NAS"},
-    {"region": "US", "symbol": "NFE", "excd": "NAS"},
-    {"region": "US", "symbol": "VSME", "excd": "NAS"},
-    {"region": "US", "symbol": "GNS", "excd": "AMS"},
-    {"region": "US", "symbol": "RZLV", "excd": "NAS"},
-    {"region": "US", "symbol": "NUAI", "excd": "NAS"},
-    {"region": "US", "symbol": "SES", "excd": "NYS"},
-    {"region": "US", "symbol": "REKR", "excd": "NAS"},
-    {"region": "US", "symbol": "LAC", "excd": "NYS"},
-    {"region": "US", "symbol": "BYND", "excd": "NAS"},
-    {"region": "US", "symbol": "WTO", "excd": "NAS"},
-    {"region": "US", "symbol": "YDKG", "excd": "NAS"}
-]
-
-UNIVERSE_STOCKS = [
-    {"region": "US", "symbol": "AAPL", "excd": "NAS"},
-    {"region": "US", "symbol": "TSLA", "excd": "NAS"},
-    {"region": "US", "symbol": "MSFT", "excd": "NAS"},
-    {"region": "US", "symbol": "AMZN", "excd": "NAS"},
-    {"region": "US", "symbol": "GOOGL", "excd": "NAS"},
-    {"region": "US", "symbol": "NVDA", "excd": "NAS"},
-    {"region": "US", "symbol": "META", "excd": "NAS"},
-    {"region": "US", "symbol": "NVDA", "excd": "NAS"},
-    {"region": "US", "symbol": "TSLA", "excd": "NAS"},
-    {"region": "US", "symbol": "QQQ", "excd": "NAS"},
-    {"region": "US", "symbol": "GOOGL", "excd": "NAS"},
-    {"region": "US", "symbol": "ORCL", "excd": "NYS"},
-    {"region": "US", "symbol": "AMD", "excd": "NAS"},
-    {"region": "US", "symbol": "SPY", "excd": "NYSE"},
-    {"region": "US", "symbol": "META", "excd": "NAS"},
-    {"region": "US", "symbol": "HOOD", "excd": "NAS"},
-    {"region": "US", "symbol": "GOOG", "excd": "NAS"},
-    {"region": "US", "symbol": "AVGO", "excd": "NAS"},
-    {"region": "US", "symbol": "COIN", "excd": "NAS"},
-    {"region": "US", "symbol": "AMZN", "excd": "NAS"},
-    {"region": "US", "symbol": "MSTR", "excd": "NAS"},
-    {"region": "US", "symbol": "MU", "excd": "NAS"},
-    {"region": "US", "symbol": "SOFI", "excd": "NAS"},
-    {"region": "US", "symbol": "SNDK", "excd": "NAS"},
-    {"region": "US", "symbol": "PLTR", "excd": "NAS"},
-    {"region": "US", "symbol": "INTC", "excd": "NAS"},
-    {"region": "US", "symbol": "MSFT", "excd": "NAS"},
-    {"region": "US", "symbol": "BABA", "excd": "NYS"},
-    {"region": "US", "symbol": "CRCL", "excd": "NYS"},
-    {"region": "US", "symbol": "BMNR", "excd": "AMS"},
-    {"region": "US", "symbol": "NFLX", "excd": "NAS"},
-    {"region": "US", "symbol": "AAPL", "excd": "NAS"},
-    {"region": "US", "symbol": "IREN", "excd": "NAS"},
-    {"region": "US", "symbol": "HIMS", "excd": "NYS"},
-    {"region": "US", "symbol": "CRWV", "excd": "NAS"},
-    {"region": "US", "symbol": "ZS", "excd": "NAS"},
-    {"region": "US", "symbol": "TMC", "excd": "NAS"},
-    {"region": "US", "symbol": "OPEN", "excd": "NAS"},
-    {"region": "US", "symbol": "ADBE", "excd": "NAS"},
-    {"region": "US", "symbol": "RGTI", "excd": "NAS"},
-    {"region": "US", "symbol": "APP", "excd": "NAS"},
-    {"region": "US", "symbol": "CLSK", "excd": "NAS"},
-    {"region": "US", "symbol": "OKLO", "excd": "NYS"},
-    {"region": "US", "symbol": "QUBT", "excd": "NAS"},
-    {"region": "US", "symbol": "RDDT", "excd": "NYS"},
-    {"region": "US", "symbol": "ONDS", "excd": "NAS"},
-    {"region": "US", "symbol": "BITF", "excd": "NAS"},
-    {"region": "US", "symbol": "SGBX", "excd": "NAS"},
-    {"region": "US", "symbol": "RKLB", "excd": "NAS"},
-    {"region": "US", "symbol": "NKE", "excd": "NYS"},
-    {"region": "US", "symbol": "BA", "excd": "NYS"},
-    {"region": "US", "symbol": "QCOM", "excd": "NAS"},
-    {"region": "US", "symbol": "QBTS", "excd": "NYS"},
-    {"region": "US", "symbol": "BURU", "excd": "AMS"},
-    {"region": "US", "symbol": "INHD", "excd": "NAS"},
-    {"region": "US", "symbol": "GPUS", "excd": "AMS"},
-    {"region": "US", "symbol": "DVLT", "excd": "NAS"},
-    {"region": "US", "symbol": "LOBO", "excd": "NAS"},
-    {"region": "US", "symbol": "AIIO", "excd": "NAS"},
-    {"region": "US", "symbol": "PLUG", "excd": "NAS"},
-    {"region": "US", "symbol": "DFLI", "excd": "NAS"},
-    {"region": "US", "symbol": "ASST", "excd": "NAS"},
-    {"region": "US", "symbol": "LAES", "excd": "NAS"},
-    {"region": "US", "symbol": "FMFC", "excd": "NAS"},
-    {"region": "US", "symbol": "MSGM", "excd": "NAS"},
-    {"region": "US", "symbol": "SLDP", "excd": "NAS"},
-    {"region": "US", "symbol": "NFE", "excd": "NAS"},
-    {"region": "US", "symbol": "VSME", "excd": "NAS"},
-    {"region": "US", "symbol": "GNS", "excd": "AMS"},
-    {"region": "US", "symbol": "RZLV", "excd": "NAS"},
-    {"region": "US", "symbol": "NUAI", "excd": "NAS"},
-    {"region": "US", "symbol": "SES", "excd": "NYS"},
-    {"region": "US", "symbol": "REKR", "excd": "NAS"},
-    {"region": "US", "symbol": "LAC", "excd": "NYS"},
-    {"region": "US", "symbol": "BYND", "excd": "NAS"},
-    {"region": "US", "symbol": "WTO", "excd": "NAS"},
-    {"region": "US", "symbol": "YDKG", "excd": "NAS"}
-]
-
+# -----------------------------
+# AI / 전략 관련 공통 파라미터
+# -----------------------------
 AI_PARAMS = {
     "lookback": 80,
-    "band_pct": 0.02
+    "band_pct": 0.02,
 }
+
+AI_PARAMS_COIN = {
+    "lookback": 80,
+    "band_pct": 0.02,
+}
+
+# -----------------------------
+# 종목 리스트 집계
+# -----------------------------
+# 기존 코드 호환용: TARGET_STOCKS / UNIVERSE_STOCKS 유지
+TARGET_STOCKS = US_TARGET_STOCKS + KR_TARGET_STOCKS
+UNIVERSE_STOCKS = US_UNIVERSE_STOCKS + KR_UNIVERSE_STOCKS
+
+# 필요하면 개별 접근도 가능
+US_TARGET_STOCKS = US_TARGET_STOCKS
+US_UNIVERSE_STOCKS = US_UNIVERSE_STOCKS
+
+KR_TARGET_STOCKS = KR_TARGET_STOCKS
+KR_UNIVERSE_STOCKS = KR_UNIVERSE_STOCKS
+
+CR_TARGET_STOCKS = CR_TARGET_STOCKS
+CR_UNIVERSE_STOCKS = CR_UNIVERSE_STOCKS  # 코인은 별도 흐름에서 사용

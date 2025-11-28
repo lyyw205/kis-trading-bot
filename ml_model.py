@@ -1,8 +1,10 @@
 # ml_model.py
+# 모델의 로딩 관련 책임만 담당하는 초심플한 핵심 파일
+# 지우면 안됨!
 import os
 import joblib
 
-from db import BotDatabase  # 로그용 (없어도 되지만 있으면 편함)
+from db_manager import BotDatabase  # 로그용 (없어도 되지만 있으면 편함)
 
 def load_model(path="models/model_v1_rf.pkl", db: BotDatabase | None = None):
     """

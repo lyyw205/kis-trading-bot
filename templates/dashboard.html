@@ -14,8 +14,34 @@
 </head>
 <body>
   <div class="layout">
-    <h1>📈 Trading Dashboard</h1>
+    <h1>
+      📈 Trading Dashboard
+      {% if region != 'ALL' %}
+        <span class="region-pill">{{ region }}</span>
+      {% endif %}
+    </h1>
+    <div class="region-tabs">
+      <a href="/?region=ALL" class="region-tab {% if region == 'ALL' %}active{% endif %}">
+        전체
+      </a>
+      <a href="/?region=KR" class="region-tab {% if region == 'KR' %}active{% endif %}">
+        KR
+      </a>
+      <a href="/?region=US" class="region-tab {% if region == 'US' %}active{% endif %}">
+        US
+      </a>
+      <a href="/?region=CR" class="region-tab {% if region == 'CR' %}active{% endif %}">
+        CR
+      </a>
+    </div>
     <!-- 요약 카드 -->
+    <p style="font-size:12px; color:#9da4c2; margin-bottom:8px;">
+      보기: 
+      {% if region == 'ALL' %}전체 시장 (KR + US + CR 기준){% endif %}
+      {% if region == 'KR' %}국내 주식 (KR){% endif %}
+      {% if region == 'US' %}미국 주식 (US){% endif %}
+      {% if region == 'CR' %}코인 (CR){% endif %}
+    </p>
     <div class="summary-grid">
       <div class="card">
         <div class="summary-item-title">총 트레이드 수</div>
@@ -499,6 +525,7 @@
 
   <!-- 차트 스크립트 -->
   <script>
+    const CURRENT_REGION = '{{ region }}';
     // 파이썬 → JS 데이터 변환 (JSON 문자열 → 객체)
     const equityData = JSON.parse('{{ equity_curve | tojson | safe }}');
     const symbolData = JSON.parse('{{ symbols_avg | tojson | safe }}');
@@ -763,7 +790,7 @@
       let symbolChart = null;   // 현재 종목 차트 핸들
 
       async function loadSymbolData(symbol) {
-        const res = await fetch(`/symbol_data?symbol=${encodeURIComponent(symbol)}`);
+        const res = await fetch(`/symbol_data?symbol=${encodeURIComponent(symbol)}&region=${encodeURIComponent(CURRENT_REGION)}`);
         if (!res.ok) {
           throw new Error("HTTP " + res.status);
         }

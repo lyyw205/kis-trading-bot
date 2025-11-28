@@ -21,6 +21,44 @@ h2 {
     font-size: 18px;
     margin: 0 0 12px;
 }
+.region-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.region-tab {
+  font-size: 13px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #374151;
+  color: #9ca3af;
+  text-decoration: none;
+  background: #020617;
+}
+
+.region-tab:hover {
+  border-color: #4b5563;
+  color: #e5e7eb;
+}
+
+.region-tab.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: #f9fafb;
+}
+
+.region-pill {
+  font-size: 11px;
+  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #111827;
+  border: 1px solid #4b5563;
+  color: #e5e7eb;
+  vertical-align: middle;
+}
 
 .grid {
     display: grid;

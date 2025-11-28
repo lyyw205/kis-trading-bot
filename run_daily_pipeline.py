@@ -26,7 +26,7 @@
        · RandomForestClassifier 학습
        · models 테이블에 버전 기록
        · settings.active_model_path 갱신
-   - backtest_seq_model.py 실행
+   - db_backtest.py 실행
        · 새로 학습한 모델로 과거 ohlcv_data 백테스트 수행 (네가 구현)
        · model_versions / backtests 테이블에 결과 기록
    - model_versions + backtests + 최근 실매매(trades) + settings를 모아서
@@ -60,7 +60,7 @@ import os
 import subprocess
 from datetime import date
 
-from db import BotDatabase
+from db_manager import BotDatabase
 
 DB_PATH = "trading.db"
 
@@ -123,37 +123,37 @@ if __name__ == "__main__":
     # --------------------------------------------------
     if RUN_BUILD_OHLCV:
         ok = run_step(
-            "OHLCV 백필 (build_ohlcv_history.py)",
-            ["python", "build_ohlcv_history.py"],
+            "OHLCV 백필 (data_ohlcv_service.py)",
+            ["python", "data_ohlcv_service.py"],
         )
         if not ok:
-            db.log("❌ run_daily_pipeline: build_ohlcv_history.py 실패, 이후 스텝 중단")
+            db.log("❌ run_daily_pipeline: data_ohlcv_service.py 실패, 이후 스텝 중단")
             raise SystemExit(1)
     else:
         print("⏭ RUN_BUILD_OHLCV=False 설정이라 OHLCV 백필 스킵")
 
     # --------------------------------------------------
-    # 2) ML 샘플 생성 (build_ml_seq_samples.py)
+    # 2) ML 샘플 생성 (ml_build_seq_samples.py)
     #    - ohlcv_data → entry_signal 발생 구간 찾기
     #    - 각 진입시점 이후 TP/SL 도달 여부로 label(0/1) 생성
     #    - ml_seq_samples 테이블을 깨끗하게 다시 채움(DELETE 후 INSERT)
     # --------------------------------------------------
     ok = run_step(
-        "ML 샘플 생성 (build_ml_seq_samples.py)",
-        ["python", "build_ml_seq_samples.py"],
+        "ML 샘플 생성 (ml_build_seq_samples.py)",
+        ["python", "ml_build_seq_samples.py"],
     )
     if not ok:
-        db.log("❌ run_daily_pipeline: build_ml_seq_samples.py 실패, 이후 스텝 중단")
+        db.log("❌ run_daily_pipeline: ml_build_seq_samples.py 실패, 이후 스텝 중단")
         raise SystemExit(1)
 
     # --------------------------------------------------
-    # 3) 학습 + 백테스트 + 모델 조언 (daily_ml_cycle.py)
+    # 3) 학습 + 백테스트 + 모델 조언 (run_daily_ml_cycle.py)
     #    - 내부에서 하는 일:
     #        (1) train_seq_model.py 실행
     #             · ml_seq_samples 기반으로 RandomForest 학습
     #             · models 테이블에 버전/정확도 기록
     #             · settings.active_model_path 갱신
-    #        (2) backtest_seq_model.py 실행
+    #        (2) db_backtest.py 실행
     #             · 새 모델로 과거 데이터 백테스트
     #             · model_versions/backtests 테이블에 결과 기록
     #        (3) make_model_update_advice() 호출
@@ -162,15 +162,15 @@ if __name__ == "__main__":
     #             · 결과를 reports/YYYY-MM-DD_model_advice.txt 에 저장
     # --------------------------------------------------
     ok = run_step(
-        "ML 학습/백테스트/모델 조언 (ai_daily_ml_cycle.py)",
-        ["python", "ai_daily_ml_cycle.py"],
+        "ML 학습/백테스트/모델 조언 (run_daily_ml_cycle.py)",
+        ["python", "run_daily_ml_cycle.py"],
     )
     if not ok:
-        db.log("❌ run_daily_pipeline: ai_daily_ml_cycle.py 실패, 이후 스텝 중단")
+        db.log("❌ run_daily_pipeline: run_daily_ml_cycle.py 실패, 이후 스텝 중단")
         raise SystemExit(1)
 
     # --------------------------------------------------
-    # 4) 일일 트레이드 리포트 + 전략 아이디어 (daily_ai_reports.py)
+    # 4) 일일 트레이드 리포트 + 전략 아이디어 (run_daily_ai_reports.py)
     #    - trades 테이블에서 오늘 날짜 트레이드만 가져옴
     #    - make_daily_trade_report():
     #         · 오늘 성과 정리 + 오늘의 문제점 + 내일부터의 행동 가이드 생성
@@ -183,11 +183,11 @@ if __name__ == "__main__":
     #         · ai_reports 테이블에도 저장 → 대시보드에서 조회 가능
     # --------------------------------------------------
     ok = run_step(
-        "AI 일일 리포트/전략 아이디어 (ai_daily_reports.py)",
-        ["python", "ai_daily_reports.py"],
+        "AI 일일 리포트/전략 아이디어 (run_daily_ai_reports.py)",
+        ["python", "run_daily_ai_reports.py"],
     )
     if not ok:
-        db.log("❌ run_daily_pipeline: ai_daily_reports.py 실패")
+        db.log("❌ run_daily_pipeline: run_daily_ai_reports.py 실패")
         raise SystemExit(1)
 
     # 전체 파이프라인 성공 로그
