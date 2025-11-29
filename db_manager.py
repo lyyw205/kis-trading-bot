@@ -476,27 +476,59 @@ class BotDatabase:
     # -----------------------------
     # AI 리포트 저장 / 조회
     # -----------------------------
-    def save_ai_report(self, date_str: str, daily_report: str, strategy_ideas: str):
+    def save_ai_report(self, date_str: str, daily_report: str, strategy_ideas: str, region: str = "ALL"):
         """
-        date_str: "YYYY-MM-DD"
+        AI 일일 리포트/전략 아이디어를 ai_reports 테이블에 저장.
+        - date_str: 'YYYY-MM-DD'
+        - region: 'ALL' / 'KR' / 'US' / 'COIN' 등
         """
-        try:
-            conn = sqlite3.connect(self.db_name)
-            c = conn.cursor()
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        import sqlite3  # 파일 상단에 이미 있으면 생략 가능
 
-            c.execute(
+        conn = sqlite3.connect(self.db_name)
+        try:
+            cur = conn.cursor()
+
+            # 0) 테이블 존재 여부 확인
+            cur.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='ai_reports'"
+            )
+            exists = cur.fetchone() is not None
+
+            if exists:
+                # 0-1) 기존 테이블에 region 컬럼이 없으면 추가 (마이그레이션)
+                cur.execute("PRAGMA table_info(ai_reports)")
+                cols = [row[1] for row in cur.fetchall()]  # row[1] = column name
+                if "region" not in cols:
+                    cur.execute(
+                        "ALTER TABLE ai_reports ADD COLUMN region TEXT DEFAULT 'ALL'"
+                    )
+
+            # 1) 테이블 없으면 새 스키마로 생성
+            cur.execute(
                 """
-                INSERT INTO ai_reports (date, created_at, daily_report, strategy_ideas)
+                CREATE TABLE IF NOT EXISTS ai_reports (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT NOT NULL,
+                    region TEXT,
+                    daily_report TEXT,
+                    strategy_ideas TEXT,
+                    created_at TEXT DEFAULT (datetime('now', 'localtime'))
+                )
+                """
+            )
+
+            # 2) INSERT (region 컬럼 포함)
+            cur.execute(
+                """
+                INSERT INTO ai_reports (date, region, daily_report, strategy_ideas)
                 VALUES (?, ?, ?, ?)
                 """,
-                (date_str, now, daily_report, strategy_ideas),
+                (date_str, region, daily_report, strategy_ideas),
             )
+
             conn.commit()
+        finally:
             conn.close()
-            self.log(f"🧠 AI 리포트 저장 완료: {date_str}")
-        except Exception as e:
-            self.log(f"⚠️ save_ai_report 실패: {e}")
 
     def get_latest_ai_report(self):
         """

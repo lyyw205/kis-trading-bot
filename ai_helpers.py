@@ -91,6 +91,11 @@ def _build_entry_prompt_us(context: dict) -> str:
 
 
 def _build_entry_prompt_cr(context: dict) -> str:
+    """
+    코인 전용 진입 프롬프트
+    - context 안에 새 코인 모델에서 쓰는 필드(예: strategy_name, cr_swing_proba, atr 등)가 있으면
+      모델이 자연스럽게 그걸 언급해줄 수 있게 JSON 그대로 보여준다.
+    """
     return f"""
 너는 **코인(암호화폐) 단기 트레이딩 봇**의 '진입 로그를 정리해주는 어시스턴트'야.
 
@@ -100,6 +105,8 @@ def _build_entry_prompt_cr(context: dict) -> str:
 
 요구사항:
 1) 왜 이 구간에서 진입했는지(전략/지표/변동성 관점)를 2~3줄로 요약해줘.
+   - strategy_name, entry_signal, ml_proba, cr_swing_proba, ATR 관련 값이 들어있다면
+     그게 어떤 조건을 의미하는지 간단히 언급해줘.
 2) 코인 시장은 24시간/고변동성이라는 특성을 한 줄 정도 상기시켜줘.
 3) 손절/익절 기준을 기록용으로 리마인드하는 느낌의 코멘트를 짧게 포함해줘.
 4) 말투는 '트레이딩 노트' 느낌으로 담백하게, 투자 권유는 하지 말 것.
@@ -182,6 +189,8 @@ def _build_exit_prompt_cr(context: dict) -> str:
 
 요구사항:
 1) 이번 청산이 어떤 구간(추세/박스/급등·급락)에서 어떤 의도로 이루어진 건지 2~3줄로 정리해줘.
+   - strategy_name, entry_signal, ml_proba, cr_swing_proba, ATR 관련 값이 있다면,
+     익절/손절이 어디서 나왔는지와 연결해서 설명해줘.
 2) 수익/손실의 원인을 한 줄 정도로 짚어줘. (예: 변동성 과대, 레인지 상단, 손절 기준 도달 등)
 3) 코인 특유의 24시간/고변동성 리스크를 고려했을 때, 다음에 같은 상황이 오면 어떻게 대응하면 좋을지 짧게 한 줄로 제안해줘.
 4) 말투는 '하루 트레이딩 복기 노트' 느낌으로 담백하게.
@@ -225,16 +234,18 @@ def brainstorm_strategy_ideas(context: dict, market: str | None = None) -> str:
     """
     장 마감 후, 통계/패턴 요약을 기반으로
     새로운 전략 아이디어를 브레인스토밍하는 함수.
-    market: "KR" / "US" / "CR" / None(전체)
+    market: "KR" / "US" / "COIN" / None(전체)
     """
     date_str = context.get("date", "알 수 없는 날짜")
-    market_str = {
+    market_str_map = {
         None: "전체 시장",
         "ALL": "전체 시장",
         "KR": "한국 주식",
         "US": "미국 주식",
         "CR": "코인",
-    }.get(market, "전체 시장")
+        "COIN": "코인",
+    }
+    market_str = market_str_map.get((market or "ALL"), "전체 시장")
 
     user_prompt = f"""
 아래는 {date_str} 기준 {market_str} 트레이딩 데이터에서 뽑아낸 통계 요약이야.
@@ -279,16 +290,18 @@ JSON 데이터:
 def make_daily_trade_report_v2(context: dict, market: str | None = None) -> str:
     """
     v2 일일 리포트: trades + signals + ohlcv 요약까지 반영.
-    market: "KR" / "US" / "CR" / None(전체)
+    market: "KR" / "US" / "COIN" / None(전체)
     """
     date_str = context.get("date", "알 수 없는 날짜")
-    market_str = {
+    market_str_map = {
         None: "전체 시장",
         "ALL": "전체 시장",
         "KR": "한국 주식",
         "US": "미국 주식",
         "CR": "코인",
-    }.get(market, "전체 시장")
+        "COIN": "코인",
+    }
+    market_str = market_str_map.get((market or "ALL"), "전체 시장")
 
     user_prompt = f"""
 너는 단기 트레이더의 **일일 코치이자 리뷰어**야.
@@ -331,16 +344,18 @@ def make_model_update_advice(context: dict, market: str | None = None) -> str:
     - threshold/룰 조정
     - A/B 테스트 플랜
     을 제안하는 함수.
-    market: "KR" / "US" / "CR" / None(전체)
+    market: "KR" / "US" / "COIN" / None(전체)
     """
     date_str = context.get("date", "알 수 없는 날짜")
-    market_str = {
+    market_str_map = {
         None: "전체 시장",
         "ALL": "전체 시장",
         "KR": "한국 주식",
         "US": "미국 주식",
         "CR": "코인",
-    }.get(market, "전체 시장")
+        "COIN": "코인",
+    }
+    market_str = market_str_map.get((market or "ALL"), "전체 시장")
 
     user_prompt = f"""
 너는 {market_str}용 단기매매 ML 모델을 운용하는 **퀀트 리서처 + 리스크 매니저**야.

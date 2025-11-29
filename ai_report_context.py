@@ -4,7 +4,7 @@ AI 리포트용 컨텍스트를 만드는 헬퍼 모듈.
 
 - trades / signals / ohlcv_data 를 조합해서
   일일 리포트(v2) + 전략 브레인스토밍용 context 를 만든다.
-- KR / US / CR 등 시장별 리포트를 만들 수 있도록
+- KR / US / COIN 등 시장별 리포트를 만들 수 있도록
   region / market 파라미터를 지원한다.
 """
 
@@ -28,7 +28,8 @@ def load_trades_for_date(target_date, region=None) -> pd.DataFrame:
     """
     trades 테이블에서 해당 날짜의 트레이드 로드.
     - time 컬럼 기준 (YYYY-MM-DD HH:MM:SS)
-    - region이 주어지면 region 컬럼으로 필터 (KR / US / CR 등)
+    - region이 주어지면 region 컬럼으로 필터 (KR / US / COIN 등)
+    - 코인 구역은 기존 CR + COIN 둘 다 포함하도록 처리
     """
     conn = sqlite3.connect(DB_PATH)
     date_str = target_date.strftime("%Y-%m-%d")
@@ -40,6 +41,17 @@ def load_trades_for_date(target_date, region=None) -> pd.DataFrame:
             WHERE DATE(time) = DATE(?)
         """
         params = [date_str]
+
+    elif region in ("CR", "COIN"):
+        # 과거 CR, 신규 COIN 둘 다 집계
+        query = """
+            SELECT *
+            FROM trades
+            WHERE DATE(time) = DATE(?)
+              AND region IN ('CR', 'COIN')
+        """
+        params = [date_str]
+
     else:
         query = """
             SELECT *
@@ -159,19 +171,24 @@ def summarize_pre_post_windows(entry_price: float, pre: pd.DataFrame, post: pd.D
 # -----------------------------
 # v2: 차트+시그널까지 포함한 context
 # -----------------------------
-def build_daily_context_v2(df_trades: pd.DataFrame, target_date: date, market: str | None = None) -> dict:
+def build_daily_context_v2(
+    df_trades: pd.DataFrame,
+    target_date: date,
+    region: str | None = None,
+) -> dict:
     """
     v2 일일 리포트용 context 생성.
     - stats: 하루 전체 성과
     - trade_details: 트레이드별로 signal + pre/post 차트 요약까지 포함
-    - market: "KR" / "US" / "CR" / None(전체)
+    - region: "KR" / "US" / "COIN" / None(전체) → 필터 기준
     """
     date_str = target_date.strftime("%Y-%m-%d")
+    market = region  # 컨텍스트 상의 시장 태그
 
     if df_trades.empty:
         return {
             "date": date_str,
-            "market": market,
+            "region": market,
             "stats": {
                 "total_trades": 0,
                 "total_profit": 0.0,
@@ -208,9 +225,11 @@ def build_daily_context_v2(df_trades: pd.DataFrame, target_date: date, market: s
         qty = int(row.get("qty", 0) or 0)
         profit_val = float(row.get("profit", 0.0) or 0.0)
 
+        # region: 개별 트레이드 기준 (없으면 필터 기준 → UNKNOWN 순서)
+        trade_region = row.get("region") or market or "UNKNOWN"
+
         # 1) 시그널 로드 (region, at_support, ... 파악)
         signal_data = None
-        region = row.get("region") or "UNKNOWN"
         signal_id = row.get("signal_id")
         if signal_id is not None:
             try:
@@ -220,9 +239,9 @@ def build_daily_context_v2(df_trades: pd.DataFrame, target_date: date, market: s
 
             if sig_row:
                 # signals 테이블에도 region이 있다면 그 값 우선
-                region = sig_row.get("region") or region
+                trade_region = sig_row.get("region") or trade_region
                 signal_data = {
-                    "region": region,
+                    "region": trade_region,
                     "at_support": sig_row.get("at_support"),
                     "is_bullish": sig_row.get("is_bullish"),
                     "price_up": sig_row.get("price_up"),
@@ -233,10 +252,13 @@ def build_daily_context_v2(df_trades: pd.DataFrame, target_date: date, market: s
                     "ml_proba": sig_row.get("ml_proba"),
                     "entry_allowed": sig_row.get("entry_allowed"),
                     "note": sig_row.get("note"),
+                    # 여기서부터는 네가 새 코인 모델에서 추가한 컬럼을 알아서 붙여도 됨
+                    "strategy_name": sig_row.get("strategy_name"),
+                    "cr_swing_proba": sig_row.get("cr_swing_proba"),
                 }
 
         # 2) OHLCV window (엔트리 전/후 차트 요약)
-        pre, post = load_ohlcv_window(region, symbol, entry_time)
+        pre, post = load_ohlcv_window(trade_region, symbol, entry_time)
         pre_summary, post_summary = summarize_pre_post_windows(entry_price, pre, post)
 
         trade_details.append(
@@ -249,7 +271,7 @@ def build_daily_context_v2(df_trades: pd.DataFrame, target_date: date, market: s
                 "qty": qty,
                 "profit": profit_val,
                 "source": row.get("source"),
-                "region": region,
+                "region": trade_region,
                 "entry_comment": row.get("entry_comment"),
                 "exit_comment": row.get("exit_comment"),
                 "signal": signal_data,
@@ -260,7 +282,7 @@ def build_daily_context_v2(df_trades: pd.DataFrame, target_date: date, market: s
 
     context = {
         "date": date_str,
-        "market": market,
+        "region": market,
         "stats": stats,
         "trade_details": trade_details,
     }
@@ -274,17 +296,21 @@ def build_brainstorm_context(df: pd.DataFrame, target_date, region=None) -> dict
     """
     전략 아이디어 브레인스토밍용 context.
     - df: 해당 일자 trades DataFrame
-    - region: "KR" / "US" / "CR" / None
+    - region: "KR" / "US" / "COIN" / None
     """
     date_str = target_date.strftime("%Y-%m-%d")
 
     # region 필터 (trades.region 컬럼 기준)
     if region is not None and not df.empty and "region" in df.columns:
-        df = df[df["region"] == region].copy()
+        if region in ("CR", "COIN"):
+            df = df[df["region"].isin(["CR", "COIN"])].copy()
+        else:
+            df = df[df["region"] == region].copy()
 
     if df.empty:
         return {
             "date": date_str,
+            "region": region,
             "overall": {
                 "total_trades": 0,
                 "win_rate": 0.0,
@@ -367,26 +393,19 @@ def build_brainstorm_context(df: pd.DataFrame, target_date, region=None) -> dict
 # -----------------------------
 # 모델 업데이트 조언용 context
 # -----------------------------
-def load_model_context_for_ai(db: BotDatabase, target_date: date, market: str | None = None) -> dict:
+def load_model_context_for_ai(
+    db: BotDatabase,
+    target_date: date,
+    market: str | None = None,
+) -> dict:
     """
     models + backtests + settings + 최근 trades 를 조합해서
     ai_helpers.make_model_update_advice() 에 넘길 context 생성.
 
-    market: "KR" / "US" / "CR" / None(전체)
+    market: "KR" / "US" / "COIN" / None(전체)
     - 현재 예시는 models/backtests 테이블에 시장 구분이 없다고 가정하고,
       단순히 market 정보를 context에 태그만 해둔다.
       (테이블에 market 컬럼을 추가하면 여기서 필터 가능)
-
-    반환 형식 예시:
-
-    {
-      "date": "2025-11-27",
-      "market": "KR",
-      "active": { ... } or None,
-      "candidate": { ... } or None,
-      "live_stats": { ... },
-      "settings": { ... },
-    }
     """
     conn = sqlite3.connect(DB_PATH)
 
@@ -456,13 +475,25 @@ def load_model_context_for_ai(db: BotDatabase, target_date: date, market: str | 
 
     # 3) 최근 실매매 성과 (예: 최근 3일, market별 필터)
     conn = sqlite3.connect(DB_PATH)
+    base_date = target_date.strftime("%Y-%m-%d")
+
     if market is None or market == "ALL":
         q = """
             SELECT *
             FROM trades
             WHERE DATE(time) >= DATE(?, '-2 day')
         """
-        params = [target_date.strftime("%Y-%m-%d")]
+        params = [base_date]
+
+    elif market in ("CR", "COIN"):
+        q = """
+            SELECT *
+            FROM trades
+            WHERE DATE(time) >= DATE(?, '-2 day')
+              AND region IN ('CR', 'COIN')
+        """
+        params = [base_date]
+
     else:
         q = """
             SELECT *
@@ -470,7 +501,7 @@ def load_model_context_for_ai(db: BotDatabase, target_date: date, market: str | 
             WHERE DATE(time) >= DATE(?, '-2 day')
               AND region = ?
         """
-        params = [target_date.strftime("%Y-%m-%d"), market]
+        params = [base_date, market]
 
     df_trades = pd.read_sql_query(q, conn, params=params)
     conn.close()
@@ -502,7 +533,7 @@ def load_model_context_for_ai(db: BotDatabase, target_date: date, market: str | 
     }
 
     ctx = {
-        "date": target_date.strftime("%Y-%m-%d"),
+        "date": base_date,
         "market": market,
         "active": active,
         "candidate": candidate,

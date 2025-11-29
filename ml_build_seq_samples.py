@@ -9,7 +9,7 @@ import pandas as pd
 from config import KR_UNIVERSE_STOCKS, US_UNIVERSE_STOCKS, CR_UNIVERSE_STOCKS
 from db_manager import BotDatabase
 from st_entry_common import add_common_entry_columns
-from st_entry_cr import make_entry_signal_coin  # ✅ CR 전용 엔트리 추가
+from tcn_entry_cr import make_entry_signal_coin_ms
 from ml_features import SEQ_LEN
 
 DB_PATH = "trading.db"
@@ -165,7 +165,7 @@ def build_samples_for_universe(ohlcv_dict: dict, universe, *, interval="5m"):
                 if len(df_seq) < SEQ_LEN:
                     continue
 
-                sig = make_entry_signal_coin(df_seq, params)
+                sig = make_entry_signal_coin_ms(df_seq, params)
                 if not sig.get("entry_signal", False):
                     continue
 

@@ -9,7 +9,7 @@ from ai_helpers import make_entry_comment, make_exit_comment
 from ml_features import SEQ_LEN, calculate_rsi, build_feature_from_seq
 from st_entry_kr import make_entry_signal_kr
 from st_entry_us import make_entry_signal_us
-from st_entry_cr import make_entry_signal_coin
+from tcn_entry_cr import make_entry_signal_coin_ms
 from st_exit_common import decide_exit
 
 
@@ -333,7 +333,7 @@ class GlobalRealTimeTrader:
             elif region == "US":
                 sig = make_entry_signal_us(df, self.params)
             elif region == "COIN":
-                sig = make_entry_signal_coin(df, self.params)
+                sig = make_entry_signal_coin_ms(df, self.params)
             else:
                 # 혹시 모르는 region 값에 대한 방어
                 sig = {

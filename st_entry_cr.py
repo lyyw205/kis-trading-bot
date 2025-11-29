@@ -8,21 +8,10 @@
 from typing import Dict, Any
 import pandas as pd
 import numpy as np
-
+from swing_infer_cr import predict_cr_swing
 from ml_features import SEQ_LEN
 from st_entry_common import make_common_entry_signal, add_common_entry_columns
-
-
-# -----------------------------
-# 🔥 1) ATR 계산 (코인 특, 변동성 필터)
-# -----------------------------
-def calculate_atr(df: pd.DataFrame, period: int = 14):
-    high_low = df["high"] - df["low"]
-    high_close = (df["high"] - df["close"].shift(1)).abs()
-    low_close = (df["low"] - df["close"].shift(1)).abs()
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    return tr.rolling(period).mean()
-
+from utils import calculate_atr
 
 # -----------------------------
 # 🔥 2) CR 전용 리버설 (wick 기반)
@@ -135,27 +124,63 @@ def make_entry_signal_coin(df: pd.DataFrame, params: dict) -> Dict[str, Any]:
     # -----------------------------
     # 🔥 최종 엔트리 결정
     # -----------------------------
+    # 🔥 1) 우선 기존 CR 전용 룰로 entry 후보 결정
+    entry_decision = None
+
     if cr_reversal:
-        return {
+        entry_decision = {
             "entry_signal": True,
             "strategy_name": "CR_REVERSAL",
             "note": "CR_REVERSAL",
         }
-
-    if cr_momentum:
-        return {
+    elif cr_momentum:
+        entry_decision = {
             "entry_signal": True,
             "strategy_name": "CR_MOMENTUM_ENHANCED",
             "note": "CR_MOMENTUM",
         }
+    elif base_signal:
+        entry_decision = base  # 기존 base 전략 허용
 
-    if base_signal:
-        # 기존 base 전략 허용
-        return base
+    if not entry_decision:
+        # 아무 전략도 안 걸리면 그냥 NO_ENTRY
+        return {
+            "entry_signal": False,
+            "strategy_name": "NONE",
+            "note": "NO_MATCH",
+        }
 
-    # 아무 것도 아니면 NO ENTRY
-    return {
-        "entry_signal": False,
-        "strategy_name": "NONE",
-        "note": "NO_MATCH",
+    # 🔥 2) 여기서 Swing 모델 예측 호출
+    swing_pred = predict_cr_swing(df)
+    if swing_pred is None:
+        # 모델/데이터 문제로 예측 실패하면 일단 기존 결정 그대로 사용
+        entry_decision["swing_pred"] = None
+        return entry_decision
+
+    r3 = swing_pred["r_3"]
+    r6 = swing_pred["r_6"]
+    r12 = swing_pred["r_12"]
+
+    entry_decision["swing_pred"] = {
+        "r_3": r3,
+        "r_6": r6,
+        "r_12": r12,
     }
+
+    # 🔥 3) 간단한 필터 룰 예시 (나중에 조정 가능)
+    min_r6 = params.get("swing_min_r6", 0.003)     # +0.3% 이상 기대
+    min_r12 = params.get("swing_min_r12", 0.005)   # +0.5% 이상 기대
+
+    # 예: r6 또는 r12 둘 다 기준보다 낮으면 진입 차단
+    if (r6 < min_r6) and (r12 < min_r12):
+        return {
+            "entry_signal": False,
+            "strategy_name": "NONE",
+            "note": f"SWING_FILTER_BLOCK(r6={r6:.4f}, r12={r12:.4f})",
+            "swing_pred": entry_decision["swing_pred"],
+        }
+
+    # 통과하면 기존 entry 유지 + note에 ML 정보 추가
+    entry_decision["note"] = (entry_decision.get("note", "") + 
+                              f"|SWING_OK(r6={r6:.4f},r12={r12:.4f})")
+    return entry_decision

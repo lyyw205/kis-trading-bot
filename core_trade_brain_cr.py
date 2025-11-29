@@ -8,8 +8,8 @@ import pandas as pd
 
 from ai_helpers import make_entry_comment, make_exit_comment
 from ml_features import SEQ_LEN, build_feature_from_seq
-from st_entry_cr import make_entry_signal_coin
-from st_exit_cr import decide_exit_coin
+from tcn_entry import make_entry_signal_coin_ms
+from tcn_exit import CrPosition, decide_exit_cr_ms
 from brk_bithumb_client import BithumbDataFetcher
 from db_manager import BotDatabase
 from config import CR_UNIVERSE_STOCKS  # [{"region": "CR", "symbol": "KRW-BTC", ...}, ...]
@@ -57,6 +57,11 @@ class CoinRealTimeTrader:
 
         # 포지션 최대 개수 (코인 전용)
         self.max_pos = 3
+
+        self.db.log(
+            "🔄 [COIN] Entry engine = Multi-Scale TCN+Transformer "
+            "(tcn_entry_cr.make_entry_signal_coin_ms 사용 중)"
+        )
 
     def _truncate_qty(self, qty: float, precision: int = 4) -> float:
         factor = 10 ** precision
@@ -208,7 +213,15 @@ class CoinRealTimeTrader:
             total_held += 1
             success_new += 1
 
-                    # 🔹 1분 취소 대상 pending 주문으로 등록
+            # 🔹 TCN Exit용 엔트리 정보 저장
+            self.trade_state[market] = {
+                "entry_time": datetime.utcnow(),
+                "ml_score_entry": ml_proba,          # 엔트리 당시 score = ml_proba로 사용
+                "ml_worst_entry": c.get("ml_worst"), # entry_candidates에서 넘어온 값
+                "atr_ratio_entry": c.get("atr_ratio"),
+            }
+
+            # 🔹 1분 취소 대상 pending 주문으로 등록
             self.pending_orders[market] = {
                 "order_id": order_id,
                 "created_at": datetime.utcnow(),
@@ -319,6 +332,7 @@ class CoinRealTimeTrader:
         )
 
         entry_candidates = []
+        entry_summary = []
         count_checked = 0
         count_skipped = 0
         count_signals = 0
@@ -383,34 +397,42 @@ class CoinRealTimeTrader:
             except Exception:
                 pass
 
-            # (4) 코인 엔트리 전략 로직
-            sig = make_entry_signal_coin(df, self.params)
-            entry_signal = sig["entry_signal"]
-            strategy_name = sig["strategy_name"]
+            # (4) 코인 엔트리 전략 로직 (Multi-Scale TCN + Transformer)
+            sig = make_entry_signal_coin_ms(df, self.params)
+
+            entry_signal = bool(sig.get("entry_signal", False))
+            strategy_name = sig.get("strategy_name", "CR_MS")
+            note = sig.get("note", "")
             at_support = sig.get("at_support", False)
             is_bullish = sig.get("is_bullish", False)
             price_up = sig.get("price_up", False)
 
+            ml_pred = sig.get("ml_pred") or {}
+            risk = sig.get("risk") or {}
+
+            ml_score = ml_pred.get("score")
+            ml_proba = ml_score  # 🔁 DB/정렬 재사용용
+
             if entry_signal:
                 count_signals += 1
 
-            # (5) ML 점수 계산
-            df_seq = df.iloc[-SEQ_LEN:]
-            seq_feat = build_feature_from_seq(df_seq)
+                # 🔹 엔트리 요약용 정보만 모아둠 (나중에 한 줄로 찍기)
+                entry_summary.append(
+                    {
+                        "market": market,
+                        "strategy": strategy_name,
+                        "score": ml_score,
+                        "atr_ratio": risk.get("atr_ratio"),
+                        "note": note,
+                    }
+                )
 
-            ml_proba = None
-            if self.model is not None and seq_feat is not None:
-                try:
-                    ml_proba = float(self.model.predict_proba([seq_feat])[0][1])
-                    ml_scores.append((market, ml_proba))
-                except Exception as e:
-                    self.db.log(f"⚠️ [COIN ML예외] {market}: {e}")
-                    ml_proba = None
+            # (5) ML 점수 목록 (요약 로그용)
+            if ml_score is not None:
+                ml_scores.append((market, ml_score))
 
             # (6) 최종 진입 허용 여부
-            entry_allowed = entry_signal and (
-                (ml_proba is not None) and (ml_proba >= self.ml_threshold)
-            )
+            entry_allowed = entry_signal
 
             # (7) 신호 DB 저장 (주식과 동일 포맷)
             signal_id = self.db.save_signal(
@@ -439,46 +461,53 @@ class CoinRealTimeTrader:
                         "ml_proba": ml_proba,
                         "signal_id": signal_id,
                         "strategy_name": strategy_name,
+                        # 🔻 TCN Exit에서 쓸 엔트리 기준 값들
+                        "ml_worst": ml_pred.get("worst"),
+                        "atr_ratio": risk.get("atr_ratio"),
                     }
                 )
 
-            # (9) 매도/청산 로직
+            # (9) 매도/청산 로직 (TCN Exit 버전)
             if has_coin and my_info:
-                info = my_info
                 avg_price = my_info["avg_price"]
                 qty = my_info["qty"]
 
-                state = self.trade_state.setdefault(
-                    market,
-                    {
-                        "tp1": False,
-                        "tp2": False,
-                        "entry_time": datetime.utcnow(),
-                        "max_profit": 0.0,
-                    },
+                # 엔트리 정보(없으면 기본값)
+                state = self.trade_state.get(market, {})
+                entry_time = state.get("entry_time", datetime.utcnow())
+                ml_score_entry = state.get("ml_score_entry")
+                ml_worst_entry = state.get("ml_worst_entry")
+                atr_ratio_entry = state.get("atr_ratio_entry")
+
+                # 🔹 CrPosition 객체 구성 (tcn_exit.CrPosition)
+                pos = CrPosition(
+                    region=region,
+                    symbol=market,
+                    side="BUY",
+                    qty=qty,
+                    entry_price=avg_price,
+                    entry_time=entry_time,
+                    ml_score_entry=ml_score_entry,
+                    ml_worst_entry=ml_worst_entry,
+                    atr_ratio_entry=atr_ratio_entry,
                 )
 
                 now = datetime.utcnow()
 
-                sell_qty, sell_type, new_state, profit_rate, elapsed_min = decide_exit_coin(
-                    symbol=market,
-                    region=region,
-                    price=price,
-                    avg_price=info["avg_price"],
-                    qty=qty,
-                    state=state,
-                    now=now,
+                # 🔹 TCN Exit 판단
+                exit_decision = decide_exit_cr_ms(
+                    pos=pos,
+                    df_5m=df,           # 방금 위에서 fetch한 5분봉 df
+                    cur_price=price,
+                    now_dt=now,
+                    params=None,        # 필요하면 TP/SL 등을 여기서 override 가능
                 )
 
-                # 상태 업데이트 / 삭제
-                if new_state.get("delete"):
-                    if market in self.trade_state:
-                        del self.trade_state[market]
-                else:
-                    self.trade_state[market] = new_state
+                if exit_decision.get("should_exit"):
+                    # 이번 버전은 풀청산 (필요하면 부분청산 로직도 나중에 추가 가능)
+                    sell_qty = qty
+                    sell_type = exit_decision.get("reason", "EXIT")
 
-                # 실제 매도
-                if sell_qty > 0:
                     success = self.fetcher.send_coin_order(
                         market=market,
                         side="ask",
@@ -488,18 +517,26 @@ class CoinRealTimeTrader:
                     )
 
                     if success:
+                        profit_rate = (price - avg_price) / avg_price
+                        elapsed_min = (now - entry_time).total_seconds() / 60.0
+
                         trade_id = self.db.save_trade(
                             region=region,
                             symbol=market,
                             trade_type=sell_type,
                             price=price,
                             qty=sell_qty,
-                            profit=profit_rate * 100
+                            profit=profit_rate * 100,  # % 단위
                         )
+
                         self.db.log(
                             f"📉[COIN매도] {market}: {sell_type} {sell_qty:.6f} "
-                            f"({profit_rate*100:.2f}%)"
+                            f"({profit_rate*100:.2f}%) | note={exit_decision.get('note','')}"
                         )
+
+                        # 🔹 포지션 종료되었으니 상태 제거
+                        if market in self.trade_state:
+                            del self.trade_state[market]
 
                         # AI 청산 코멘트
                         try:
@@ -536,3 +573,28 @@ class CoinRealTimeTrader:
             f"| 🔥ML Top3: [{top_ml_str}]"
         )
         self.db.log(summary_msg)
+
+        # 5. 엔트리 요약 (이번 스캔에서 신호 뜬 코인만)
+        if entry_summary:
+            # score가 None 아닌 것만 정렬 (내림차순)
+            sorted_entries = sorted(
+                entry_summary,
+                key=lambda x: (x["score"] is not None, x["score"]),
+                reverse=True,
+            )
+
+            # 너무 길어지지 않게 상위 N개만 표시 (예: 10개)
+            N = 3
+            lines = []
+            for e in sorted_entries[:N]:
+                m = e["market"]
+                strat = e["strategy"]
+                sc = e["score"]
+                atr = e["atr_ratio"]
+                sc_str = f"{sc*100:.2f}%" if sc is not None else "NA"
+                atr_str = f"{atr*100:.2f}%" if atr is not None else "NA"
+                lines.append(f"{m}:{strat} score={sc_str}, ATR={atr_str}")
+
+            msg = "🔥 [COIN ENTRY SUMMARY] " + " | ".join(lines)
+            self.db.log(msg)
+

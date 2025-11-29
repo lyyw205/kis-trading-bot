@@ -104,7 +104,8 @@ def select_ai_params(region: Optional[str]):
     지금은 공통 AI_PARAMS 하나지만,
     나중에 region별로 다르게 쓰고 싶으면 여기서 분기하면 됨.
     """
-    # 예: if region == "CR": return AI_PARAMS_CR
+    if region == "CR":
+        return AI_PARAMS_COIN
     return AI_PARAMS
 
 
@@ -123,11 +124,11 @@ def run_realtime_coin_bot():
     targets = [t for t in CR_TARGET_STOCKS if t.get("region") == "CR"]
     params = select_ai_params("CR")
 
-    model = load_active_model(db, for_region="CR")
-    ml_threshold = load_ml_threshold(db, default=0.55, for_region="CR")
+    # 🔧 예전 seq 모델은 사용 안 함 (멀티스케일 모델은 swing_infer_cr에서 로드)
+    model = None
+    ml_threshold = 0.0
+    db.log("🔧 [설정] COIN ML Threshold = (미사용, Multi-Scale 모델 내장)")
 
-    ml_threshold = 0.35  # 일단 고정값으로 사용 (원하면 settings에서 빼도 됨)
-    db.log(f"🔧 [설정] COIN ML Threshold = {ml_threshold}")
     db.log(f"🎯 COIN 대상 종목 개수: {len(targets)}")
 
     bot = CoinRealTimeTrader(
@@ -135,9 +136,9 @@ def run_realtime_coin_bot():
         targets=targets,
         params=params,
         db=db,
-        model=model,            # 코인용 ML모델 아직 없으면 None
+        model=model,
         ml_threshold=ml_threshold,
-        dry_run=False,          # 필요시 True로 돌려도 됨
+        dry_run=False,
     )
 
     try:

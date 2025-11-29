@@ -36,7 +36,7 @@ def backfill_universe_ohlcv():
     interval = "5m"
     KR_COUNT = 1600
     US_COUNT = 1600
-    COIN_COUNT = 2000  # 24h라 좀 더 길게
+    COIN_COUNT = 20000  # 24h라 좀 더 길게
 
     # 유니버스를 한 번에 다루기 위해 리스트 합치고, 안에 region으로 구분
     all_universe = (

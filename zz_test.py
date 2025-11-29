@@ -1,210 +1,179 @@
-# backtest_entry_coin_rule.py
-"""
-코인(CR) 전용 엔트리 룰 (make_entry_signal_coin) 승률 테스트 스크립트
-
-- ohlcv_data 테이블의 CR/5m 캔들을 사용
-- SEQ_LEN 윈도우를 굴리면서 make_entry_signal_coin 적용
-- 진입 신호가 나온 지점에서 STEP_AHEAD 뒤 종가 기준 수익률 계산
-"""
-
-import sqlite3
-from collections import defaultdict
-
+# db_backfill.py
+import time
+from datetime import datetime
 import pandas as pd
-import numpy as np
+import pybithumb  # [변경] 빗썸 라이브러리 사용
 
-from ml_features import SEQ_LEN
-from st_entry_cr import make_entry_signal_coin
+from db_manager import BotDatabase
+from brk_kis_client import KisDataFetcher
 
-# ✅ DB 경로 - 네 환경에 맞게 수정
-from dash_data import DB_PATH  # 이미 쓰고 있으면 이대로, 아니면 문자열로 바꿔도 됨
-# DB_PATH = "trading.db"
+from config import (
+    APP_KEY,
+    APP_SECRET,
+    ACCOUNT_NO,
+    KR_UNIVERSE_STOCKS,
+    US_UNIVERSE_STOCKS,
+    CR_UNIVERSE_STOCKS,
+)
 
+from db_ohlcv_service import get_ohlcv_unified
 
-# ▷ CR 전용 파라미터 (원하면 튜닝 가능)
-CR_PARAMS = {
-    "lookback": 20,
-    "band_pct": 0.01,
-    "atr_max_ratio": 0.025,   # ATR/close 2.5% 이상이면 너무 미쳐돌아가는 구간 → 진입X
-    "hl_max_ratio": 0.035,    # (high-low)/close 3.5% 이상인 캔들도 컷
-}
-
-# ▷ 몇 캔들 뒤 수익률을 볼지
-STEP_AHEAD = 3
+DB_PATH = "trading.db"
 
 
-def load_cr_symbols(conn):
+def backfill_universe_ohlcv():
     """
-    ohlcv_data 에서 CR 심볼 목록 가져오기
-    region 컬럼이 없다면, DISTINCT symbol 만 써도 됨.
+    KR / US / COIN 유니버스 전체에 대해 5분봉 OHLCV 과거 데이터를 백필한다.
+    
+    [변경사항]
+    - CR(코인): pybithumb를 사용하여 빗썸 데이터 수집
+    - KR/US: 기존 통합 서비스(get_ohlcv_unified) 사용
     """
-    try:
-        df = pd.read_sql_query(
-            """
-            SELECT DISTINCT symbol
-            FROM ohlcv_data
-            WHERE interval = '5m'
-              AND region = 'CR'
-            """,
-            conn,
-        )
-    except Exception:
-        # region 컬럼이 없다면 interval 만으로 필터링
-        df = pd.read_sql_query(
-            """
-            SELECT DISTINCT symbol
-            FROM ohlcv_data
-            WHERE interval = '5m'
-            """,
-            conn,
-        )
-    return df["symbol"].tolist()
+    db = BotDatabase(DB_PATH)
+    db.log("📦 [UNIVERSE] OHLCV 과거 데이터 백필 시작 (CR source: Bithumb)")
 
+    kis_client = KisDataFetcher(APP_KEY, APP_SECRET, ACCOUNT_NO, mode="real", logger=db.log)
 
-def load_ohlcv_for_symbol(conn, symbol: str) -> pd.DataFrame:
-    """
-    특정 심볼의 5분봉 전체 로드
-    """
-    df = pd.read_sql_query(
-        """
-        SELECT dt, open, high, low, close, volume
-        FROM ohlcv_data
-        WHERE symbol = ?
-          AND interval = '5m'
-        ORDER BY datetime(dt)
-        """,
-        conn,
-        params=(symbol,),
+    interval = "5m"
+    
+    # ----------------------------------------
+    # 수집 개수 설정
+    # ----------------------------------------
+    KR_COUNT = 1600
+    US_COUNT = 1600
+    # 빗썸은 API 호출 시 개수 지정이 아니라 주는 대로 다 받으므로
+    # 이 숫자는 KR/US 처럼 엄격하게 쓰이진 않지만 로그용으로 남겨둠
+    COIN_COUNT = 2000 
+
+    # 유니버스를 한 번에 다루기 위해 리스트 합치고, 안에 region으로 구분
+    all_universe = (
+        list(KR_UNIVERSE_STOCKS)
+        + list(US_UNIVERSE_STOCKS)
+        + list(CR_UNIVERSE_STOCKS)
     )
-    if df.empty:
-        return df
 
-    df["dt"] = pd.to_datetime(df["dt"])
-    df = df.rename(columns={"dt": "time"})
-    return df
+    for t in all_universe:
+        region = t["region"]          # "KR" / "US" / "CR"
+        symbol = t["symbol"]          # "005930" / "VSME" / "KRW-BTC"
+        excd = t.get("excd")          # KRX / NAS / UPBIT or None
 
-
-def backtest_symbol(df: pd.DataFrame, symbol: str):
-    """
-    단일 심볼에 대해:
-      - SEQ_LEN 창을 굴려가며 make_entry_signal_coin 적용
-      - entry_signal True인 지점의 STEP_AHEAD 수익률 계산
-
-    return:
-      - list of dicts: 개별 신호 결과
-    """
-    results = []
-
-    if len(df) < SEQ_LEN + STEP_AHEAD + 1:
-        return results
-
-    # 인덱스를 깔끔하게 0..N-1 로
-    df = df.reset_index(drop=True)
-
-    # 반복: i = 시그널 판단 시점 index
-    # i번째 캔들까지 포함된 구간: df[i-SEQ_LEN+1 : i+1] 길이 = SEQ_LEN
-    for i in range(SEQ_LEN, len(df) - STEP_AHEAD):
-        window = df.iloc[i - SEQ_LEN : i].copy()
-
-        # st_entry_coin은 "최근 SEQ_LEN 개 전체 df"를 기대하므로
-        # window를 그대로 넘김
-        signal = make_entry_signal_coin(
-            window[["open", "high", "low", "close", "volume"]],
-            CR_PARAMS,
-        )
-
-        if not signal.get("entry_signal", False):
+        # 자산군별 count 설정
+        if region == "KR":
+            count = KR_COUNT
+        elif region == "US":
+            count = US_COUNT
+        elif region == "CR":
+            count = COIN_COUNT
+        else:
+            db.log(f"⚠️ 지원하지 않는 region: {region} {symbol}, 스킵")
             continue
 
-        # 진입/청산 시점
-        entry_idx = i - 1  # window 마지막 캔들 = 실질 시점
-        exit_idx = entry_idx + STEP_AHEAD
-        if exit_idx >= len(df):
-            continue  # 미래 캔들이 없으면 스킵
+        db.log(f"⏳ 백필 시작: {region} {symbol}")
 
-        entry_row = df.iloc[entry_idx]
-        exit_row = df.iloc[exit_idx]
+        df = None
 
-        entry_price = float(entry_row["close"])
-        exit_price = float(exit_row["close"])
-        if entry_price <= 0:
+        # -------------------------------------------------------
+        # [수정] CR(코인)인 경우 -> pybithumb 사용
+        # -------------------------------------------------------
+        if region == "CR":
+            try:
+                # 1. 심볼 변환: "KRW-BTC" -> "BTC" (pybithumb는 티커만 사용)
+                ticker = symbol.replace("KRW-", "")
+                
+                # 2. 빗썸 API 호출 (interval="minute5")
+                # pybithumb.get_ohlcv는 제공 가능한 최대 기간을 DataFrame으로 반환함
+                df = pybithumb.get_ohlcv(ticker, interval="minute5")
+                
+                if df is not None and not df.empty:
+                    # 필요한 컬럼만 선택 (pybithumb는 기본적으로 이 컬럼들을 제공함)
+                    df = df[["open", "high", "low", "close", "volume"]]
+                    
+                    # 결측 제거 및 정렬
+                    df = df.dropna().sort_index()
+                    
+            except Exception as e:
+                error_msg = f"Bithumb Fetch Fail: {e}"
+                db.log(f"⚠️ {region} {symbol} 조회 실패: {error_msg}")
+                db.log_universe_backfill_failure(
+                    region=region,
+                    symbol=symbol,
+                    excd="BITHUMB",
+                    interval=interval,
+                    error_type="fetch_error",
+                    error_message=error_msg,
+                )
+                continue
+
+        # -------------------------------------------------------
+        # [기존] KR / US 인 경우 -> 통합 서비스 사용
+        # -------------------------------------------------------
+        else:
+            try:
+                df = get_ohlcv_unified(
+                    region=region,
+                    symbol=symbol,
+                    exchange=excd,
+                    interval=interval,
+                    count=count,
+                    kis_client=kis_client,
+                    upbit_client=None, 
+                )
+            except Exception as e:
+                db.log(f"⚠️ OHLCV 조회 실패: {region} {symbol} | {e}")
+                db.log_universe_backfill_failure(
+                    region=region,
+                    symbol=symbol,
+                    excd=excd,
+                    interval=interval,
+                    error_type="fetch_error",
+                    error_message=str(e),
+                )
+                continue
+
+        # -------------------------------------------------------
+        # 공통: 데이터 저장 처리
+        # -------------------------------------------------------
+        # 2) 데이터 없음 처리
+        if df is None or df.empty:
+            db.log(f"⚠️ 데이터 없음: {region} {symbol}")
+            db.log_universe_backfill_failure(
+                region=region,
+                symbol=symbol,
+                excd=excd,
+                interval=interval,
+                error_type="empty_data",
+                error_message="no rows",
+            )
             continue
 
-        ret_pct = (exit_price / entry_price - 1.0) * 100.0
+        # 3) 실제 범위/개수 로그
+        try:
+            first_ts = df.index.min()
+            last_ts = df.index.max()
+            db.log(
+                f"📏 {region} {symbol}: 5분봉 {len(df)}개 확보 | "
+                f"{first_ts} ~ {last_ts}"
+            )
+        except Exception:
+            db.log(f"📏 {region} {symbol}: 5분봉 {len(df)}개 (index 정보 없음)")
 
-        results.append(
-            {
-                "symbol": symbol,
-                "entry_time": entry_row["time"],
-                "exit_time": exit_row["time"],
-                "entry_price": entry_price,
-                "exit_price": exit_price,
-                "ret_pct": ret_pct,
-                "strategy_name": signal.get("strategy_name", "UNKNOWN"),
-                "note": signal.get("note", ""),
-            }
-        )
+        # 4) DB 저장
+        # save_ohlcv_df 함수가 내부적으로 region, symbol, interval 컬럼을 추가해서 저장해줌
+        # df의 인덱스는 dt로 변환되어 저장됨
+        db.save_ohlcv_df(region, symbol, interval, df)
+        db.log(f"✅ 백필 완료: {region} {symbol}")
 
-    return results
+        # API 호출 간격 조절
+        time.sleep(0.3)
 
+    # 마지막 실행 시각 기록
+    db.set_setting(
+        "last_universe_ohlcv_backfill",
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    )
 
-def main():
-    conn = sqlite3.connect(DB_PATH)
-
-    symbols = load_cr_symbols(conn)
-    print(f"🔍 CR 테스트 대상 심볼 수: {len(symbols)}")
-
-    all_results = []
-
-    for sym in symbols:
-        df = load_ohlcv_for_symbol(conn, sym)
-        if df.empty:
-            print(f"  - {sym}: 캔들 없음, 스킵")
-            continue
-
-        res = backtest_symbol(df, sym)
-        all_results.extend(res)
-        print(f"  - {sym}: 신호 {len(res)}개")
-
-    conn.close()
-
-    if not all_results:
-        print("❌ 생성된 신호가 없습니다. 조건이 너무 빡센지 확인해보세요.")
-        return
-
-    df_res = pd.DataFrame(all_results)
-
-    # 전체 통계
-    total = len(df_res)
-    wins = (df_res["ret_pct"] > 0).sum()
-    win_rate = wins / total * 100.0
-    avg_ret = df_res["ret_pct"].mean()
-    med_ret = df_res["ret_pct"].median()
-
-    print("\n==============================")
-    print("📊 전체 CR 엔트리 룰 성능")
-    print("==============================")
-    print(f"총 신호 수          : {total}")
-    print(f"승률(>0%)           : {win_rate:.2f}%  ({wins}/{total})")
-    print(f"평균 수익률(%)      : {avg_ret:.3f}%")
-    print(f"중앙값 수익률(%)    : {med_ret:.3f}%")
-
-    # 전략별 통계
-    print("\n------------------------------")
-    print("전략 유형별 성능 (strategy_name)")
-    print("------------------------------")
-    for name, grp in df_res.groupby("strategy_name"):
-        n = len(grp)
-        w = (grp["ret_pct"] > 0).sum()
-        wr = w / n * 100.0
-        avg = grp["ret_pct"].mean()
-        print(f"[{name:20}] 신호 {n:4d}개 | 승률 {wr:6.2f}% | 평균 {avg:7.3f}%")
-
-    # 원하면 CSV로 저장해서 엑셀로도 볼 수 있음
-    out_path = "cr_entry_rule_results.csv"
-    df_res.to_csv(out_path, index=False, encoding="utf-8-sig")
-    print(f"\n💾 개별 신호 결과 CSV 저장: {out_path}")
+    db.log("🎉 [UNIVERSE] OHLCV 과거 데이터 백필 전체 완료")
 
 
 if __name__ == "__main__":
-    main()
+    backfill_universe_ohlcv()
