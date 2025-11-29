@@ -166,7 +166,7 @@ if __name__ == "__main__":
         ["python", "run_daily_ml_cycle.py"],
     )
     if not ok:
-        db.log("❌ run_daily_pipeline: run_daily_ml_cycle.py 실패, 이후 스텝 중단")
+        db.log("❌ run_daily_pipeline: run_daily_ml_train.py 실패, 이후 스텝 중단")
         raise SystemExit(1)
 
     # --------------------------------------------------

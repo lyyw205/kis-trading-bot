@@ -29,7 +29,7 @@ def run_training_script() -> bool:
     """
     print("새 모델 학습 시작...")
     result = subprocess.run(
-        ["python", "ml_train_seq_model.py"],
+        ["python", "ml_train_cr.py"],
         capture_output=True,
         text=True,
     )
@@ -46,7 +46,7 @@ def run_backtest_script() -> bool:
     """
     print("새 모델 백테스트 시작...")
     result = subprocess.run(
-        ["python", "db_backtest.py"],
+        ["python", "db_backtest_cr.py"],
         capture_output=True,
         text=True,
     )
@@ -65,18 +65,18 @@ if __name__ == "__main__":
     target_date = date.today()
     db = BotDatabase("trading.db")
 
-    db.log("run_daily_ml_cycle 시작")
+    db.log("run_daily_ml_train 시작")
 
     # 1) 새 모델 학습
     ok_train = run_training_script()
     if not ok_train:
-        db.log("run_daily_ml_cycle: 학습 실패, 이후 스텝 중단")
+        db.log("run_daily_ml_train: 학습 실패, 이후 스텝 중단")
         exit(1)
 
     # 2) 새 모델 백테스트
     ok_bt = run_backtest_script()
     if not ok_bt:
-        db.log("run_daily_ml_cycle: 백테스트 실패, 이후 스텝 중단")
+        db.log("db_backtest.cr.py: 백테스트 실패, 이후 스텝 중단")
         exit(1)
 
     # 3) active vs candidate & live 성과 context 생성
@@ -96,4 +96,4 @@ if __name__ == "__main__":
     with open(fname, "w", encoding="utf-8") as f:
         f.write(advice)
 
-    db.log(f"run_daily_ml_cycle 완료, 모델 조언 저장: {fname}")
+    db.log(f"run_daily_ml_train 완료, 모델 조언 저장: {fname}")

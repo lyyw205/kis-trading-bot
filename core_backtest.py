@@ -192,6 +192,7 @@ def simulate_coin_trade_with_exit_logic(
         # 현재 잔여 수량에 대해 exit 로직 적용
         sell_qty, sell_type, new_state, profit_rate, elapsed_min = decide_exit_coin(
             symbol="",  # 백테스트에선 굳이 심볼 안 써도 됨
+            region="CR",
             price=price,
             avg_price=entry_price,   # 부분 익절 후에도 entry_price 기준으로 계산 (단순화)
             qty=qty_remain,
