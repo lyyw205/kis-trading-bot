@@ -56,9 +56,16 @@ def build_multiscale_samples_cr(
     feature_cols: Optional[List[str]] = None,
     seq_lens: Optional[Dict[str, int]] = None,
     horizons: Optional[List[int]] = None,
-    min_future_bars: int = None,
     return_index: bool = False,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]]:
+) -> Tuple[
+    np.ndarray,  # X_5m: (N, L5, F)
+    np.ndarray,  # X_15m: (N, L15, F)
+    np.ndarray,  # X_30m: (N, L30, F)
+    np.ndarray,  # X_1h: (N, L1h, F)
+    np.ndarray,  # Y: (N, H)
+    Optional[np.ndarray],  # base_dt: (N,) or None
+]:
+
     """
     벡터화된 멀티스케일 샘플 생성기 (속도 최적화)
 

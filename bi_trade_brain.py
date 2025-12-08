@@ -18,10 +18,9 @@ from bi_features import (            # ✅ 공통 Feature 정의에서 가져오
 from ai_helpers import make_entry_comment, make_exit_comment
 from bi_entry_hub import (
     pick_best_entry_across_universe,
-    ENTRY_VERSION,
     DEFAULT_ENTRY_PARAMS_MS,
 )
-from bi_exit_lib import CrPosition, EXIT_VERSION
+from bi_exit_lib import CrPosition
 from bi_exit_hub import decide_exit_cr
 from bi_client import BinanceDataFetcher
 from c_db_manager import BotDatabase
@@ -48,7 +47,7 @@ class BinanceCoinRealTimeTrader:
         self.region = "BI"
         self.fetcher = fetcher
         self.targets = targets
-        MIN_BARS_5M = max(SEQ_LENS["5m"], max(HORIZONS) + 10)
+        self.min_bars_5m = max(SEQ_LENS["5m"], max(HORIZONS) + 10)
         base_params = DEFAULT_ENTRY_PARAMS_MS.copy()
         if params:
             base_params.update(params)
@@ -791,10 +790,10 @@ class BinanceCoinRealTimeTrader:
                     df = self.fetcher.get_coin_ohlcv(
                         symbol,
                         "5m",
-                        limit=max(120, self.MIN_BARS_5M),  # ✅ limit도 공통 기준 이상으로
+                        limit=max(120, self.min_bars_5m),  # ✅ limit도 공통 기준 이상으로
                         market_type=self.market_type,
                     )
-                    if df is None or len(df) < self.MIN_BARS_5M:
+                    if df is None or len(df) < self.min_bars_5m:
                         continue
 
                     pos_state = self.trade_state.get(symbol, {})
@@ -1254,10 +1253,10 @@ class BinanceCoinRealTimeTrader:
                 df = self.fetcher.get_coin_ohlcv(
                     symbol,
                     "5m",
-                    limit=max(120, self.MIN_BARS_5M),  # ✅ limit도 공통 기준 이상으로
+                    limit=max(120, self.min_bars_5m),  # ✅ limit도 공통 기준 이상으로
                     market_type=self.market_type,
                 )
-                if df is None or len(df) < self.MIN_BARS_5M:
+                if df is None or len(df) < self.min_bars_5m:
                     continue
 
                 if not holding_any and not self._is_in_cooldown(symbol):
