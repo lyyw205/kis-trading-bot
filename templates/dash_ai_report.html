@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="layout">
+  <h1>🤖 AI 리포트</h1>
+
+  <div>
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span id="ai-report-date">AI 리포트</span>
+      <small id="ai-report-created-at" class="text-muted"></small>
+    </div>
+
+    <div>
+
+      <!-- 1) 일일 트레이드 리포트 -->
+      <div>
+        <h5>📊 일일 트레이드 리포트</h5>
+        <pre id="ai-daily-report" class="card"
+             style="white-space:pre-wrap; max-height:400px; overflow:auto; font-size:0.9rem; font-family: Pretendard; line-height: 1.5; font-weight: 300;"></pre>
+      </div>
+
+      <!-- 2) 전략 아이디어 브레인스토밍 -->
+      <div>
+        <h5>🧠 전략 아이디어 브레인스토밍</h5>
+        <pre id="ai-strategy-ideas" class="card"
+             style="white-space:pre-wrap; max-height:400px; overflow:auto; font-size:0.9rem; font-family: Pretendard; line-height: 1.5; font-weight: 300;"></pre>
+      </div>
+
+      <!-- 3) 모델 업데이트 / 튜닝 조언 -->
+      <div>
+        <div class="d-flex justify-content-between align-items-center">
+          <h5>🛠 모델 업데이트 / 튜닝 조언</h5>
+          <small id="ai-model-advice-date" class="text-muted"></small>
+        </div>
+        <pre id="ai-model-advice" class="card"
+             style="white-space:pre-wrap; max-height:400px; overflow:auto; font-size:0.9rem; font-family: Pretendard; line-height: 1.5; font-weight: 300;"></pre>
+      </div>
+
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadAiReportFull() {
+  try {
+    const res = await fetch('/api/ai-report/full');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+
+    const dateLabel = data.date
+      ? `${data.date} 기준 AI 리포트`
+      : 'AI 리포트 (데이터 없음)';
+    document.getElementById('ai-report-date').textContent = dateLabel;
+
+    if (data.created_at) {
+      document.getElementById('ai-report-created-at').textContent =
+        `생성 시각: ${data.created_at}`;
+    } else {
+      document.getElementById('ai-report-created-at').textContent = '';
+    }
+
+    document.getElementById('ai-daily-report').textContent =
+      data.daily_report && data.daily_report.trim()
+        ? data.daily_report
+        : '아직 생성된 일일 트레이드 리포트가 없습니다.';
+
+    document.getElementById('ai-strategy-ideas').textContent =
+      data.strategy_ideas && data.strategy_ideas.trim()
+        ? data.strategy_ideas
+        : '아직 생성된 전략 아이디어 브레인스토밍 결과가 없습니다.';
+
+    const modelAdviceDate = data.model_advice_date
+      ? `(${data.model_advice_date} 기준)`
+      : '';
+    document.getElementById('ai-model-advice-date').textContent = modelAdviceDate;
+
+    document.getElementById('ai-model-advice').textContent =
+      data.model_advice && data.model_advice.trim()
+        ? data.model_advice
+        : '아직 저장된 모델 업데이트/튜닝 조언이 없습니다.\n\n' +
+          '👉 daily_ml_cycle.py를 한 번 실행하면 reports/ 아래에\n' +
+          '   *_model_advice.txt 파일이 생성되고 여기 표시됩니다.';
+  } catch (err) {
+    console.error('AI 리포트 로드 실패:', err);
+    document.getElementById('ai-daily-report').textContent =
+      'AI 리포트를 불러오는 중 오류가 발생했습니다.';
+    document.getElementById('ai-strategy-ideas').textContent = '';
+    document.getElementById('ai-model-advice').textContent =
+      '모델 조언을 불러오는 중 오류가 발생했습니다.';
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadAiReportFull();
+});
+</script>
+{% endblock %}

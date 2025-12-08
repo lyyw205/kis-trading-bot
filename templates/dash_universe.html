@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="layout">
+  <div style="display: flex; flex-direction: row; justify-content: space-between; align-items: center;">
+    <div style="display: flex; flex-direction: column;">
+      <h2 style="margin: 0;">🌌 종목별 캔들 데이터 (Universe OHLCV Coverage)</h2>
+      <p class="universe-updated">
+        Last updated:
+        <span>{{ last_universe_backfill or '—' }}</span>
+      </p>
+    </div>
+
+    <div class="universe-summary">
+      <div class="universe-summary-item">
+        <span class="label">Symbols</span>
+        <span class="value">{{ num_universe_symbols }}</span>
+      </div>
+      <div class="universe-summary-item">
+        <span class="label">Total candles</span>
+        <span class="value">{{ total_universe_candles }}</span>
+      </div>
+      <div class="universe-summary-item">
+        <span class="label">Max days covered</span>
+        <span class="value">{{ max_days_covered }}</span>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="universe-table-wrapper card">
+      <table class="universe-table">
+        <thead>
+          <tr>
+            <th>Region</th>
+            <th>Symbol</th>
+            <th>Interval</th>
+            <th class="text-right">Candles</th>
+            <th class="text-right">Days</th>
+            <th>Start</th>
+            <th>End</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in universe_cov %}
+            {% set days = row.days_covered|int %}
+            <tr>
+              <td>{{ row.region }}</td>
+              <td><code>{{ row.symbol }}</code></td>
+              <td>{{ row.interval }}</td>
+              <td class="text-right">{{ row.candles }}</td>
+              <td class="text-right">
+                {% if days >= 20 %}
+                  <span class="badge badge-good">{{ days }}</span>
+                {% elif days >= 5 %}
+                  <span class="badge badge-mid">{{ days }}</span>
+                {% else %}
+                  <span class="badge badge-bad">{{ days }}</span>
+                {% endif %}
+              </td>
+              <td>{{ row.first_dt }}</td>
+              <td>{{ row.last_dt }}</td>
+            </tr>
+          {% endfor %}
+          {% if universe_cov|length == 0 %}
+          <tr><td colspan="7">Universe 데이터가 없습니다.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% if universe_failures %}
+  <div class="card universe-failures">
+    <h2>Recent backfill issues</h2>
+    <div class="scroll-box">
+      <ul>
+        {% for f in universe_failures %}
+          <li>
+            <span class="fail-time">[{{ f.created_at }}]</span>
+            <span class="fail-tag">{{ f.region }} {{ f.symbol }}</span>
+            <span class="fail-type">{{ f.error_type }}</span>
+            <span class="fail-msg">{{ f.error_message }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

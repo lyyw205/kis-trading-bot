@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="layout">
+  <h1>🧠 ML 모니터링</h1>
+  <div style="display: flex; flex-direction: row; gap: 20px;">
+    <div style="width: 40%;">
+      <div class="card-header">ML 확률 분포 (히스토그램)</div>
+      <div class="ml-chart1 card">
+        <canvas id="mlHistChart"></canvas>
+      </div>
+    </div>
+    <div style="flex: 1;">
+      <div class="card-header">시간대별 ML 확률 & 진입 허용</div>
+      <div class="ml-chart2 card">
+        <canvas id="mlTimeChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="card-header">ML 모델 버전 히스토리</div>
+  <div class="scroll-box card">
+    <table class="table table-sm table-striped">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>생성일시</th>
+          <th>모델 경로</th>
+          <th>학습 샘플 수</th>
+          <th>검증 정확도(%)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in model_versions %}
+        <tr>
+          <td>{{ m.id }}</td>
+          <td>{{ m.created_at }}</td>
+          <td>{{ m.path }}</td>
+          <td>{{ m.n_samples }}</td>
+          <td>{{ "%.2f"|format((m.val_accuracy or 0) * 100) }}</td>
+        </tr>
+        {% endfor %}
+        {% if model_versions|length == 0 %}
+        <tr><td colspan="5">모델 버전 기록이 없습니다.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card-header">백테스트 결과 (최근 50개)</div>
+  <div class="card scroll-box">
+    <table class="table table-sm table-bordered">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>모델(ID / 버전)</th>
+          <th>기간</th>
+          <th>트레이드 수</th>
+          <th>승률(%)</th>
+          <th>평균 수익률(%)</th>
+          <th>누적 수익률(%)</th>
+          <th>최대낙폭(%)</th>
+          <th>메모</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for b in backtests %}
+        <tr>
+          <td>{{ b.id }}</td>
+          <td>{{ b.model_id }} / {{ b.model_name }} {{ b.model_version }}</td>
+          <td>{{ b.start_date }} ~ {{ b.end_date }}</td>
+          <td>{{ b.trades }}</td>
+          <td>{{ "%.2f"|format(b.win_rate or 0) }}</td>
+          <td>{{ "%.2f"|format(b.avg_profit or 0) }}</td>
+          <td>{{ "%.2f"|format(b.cum_return or 0) }}</td>
+          <td>{{ "%.2f"|format(b.max_dd or 0) }}</td>
+          <td>{{ b.note }}</td>
+        </tr>
+        {% endfor %}
+        {% if backtests|length == 0 %}
+        <tr><td colspan="9">백테스트 기록이 없습니다.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const mlHistLabels = JSON.parse('{{ ml_hist_labels | tojson | safe }}');
+  const mlHistCounts = JSON.parse('{{ ml_hist_counts | tojson | safe }}');
+  const mlTimeSeries = JSON.parse('{{ ml_time_series | tojson | safe }}');
+
+  // 히스토그램
+  if (mlHistLabels.length > 0) {
+    const ctxHist = document.getElementById('mlHistChart').getContext('2d');
+    new Chart(ctxHist, {
+      type: 'bar',
+      data: {
+        labels: mlHistLabels,
+        datasets: [{
+          data: mlHistCounts,
+          backgroundColor: 'rgba(129,140,248,0.7)',
+          borderColor: 'rgba(129,140,248,1)',
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { display: false },
+          title: { display: false }
+        },
+        scales: {
+          x: { title: { display: true, text: 'ml_proba 구간' } },
+          y: { title: { display: true, text: 'count' }, beginAtZero: true }
+        }
+      }
+    });
+  }
+
+  // 시간 시계열
+  if (mlTimeSeries.length > 0) {
+    const times = mlTimeSeries.map(d => d.time);
+    const probas = mlTimeSeries.map(d => d.proba);
+    const allowedPoints = mlTimeSeries
+      .map((d, idx) => d.entry_allowed ? { x: idx, y: probas[idx] } : null)
+      .filter(d => d !== null);
+
+    const ctxTime = document.getElementById('mlTimeChart').getContext('2d');
+    new Chart(ctxTime, {
+      type: 'line',
+      data: {
+        labels: times,
+        datasets: [
+          {
+            label: 'ml_proba',
+            data: probas,
+            tension: 0.2,
+            pointRadius: 2,
+            borderColor: 'rgba(52,211,153,0.9)',
+            backgroundColor: 'rgba(52,211,153,0.15)',
+          },
+          {
+            label: 'entry_allowed=1',
+            type: 'scatter',
+            data: allowedPoints,
+            pointRadius: 5,
+            pointStyle: 'circle',
+            backgroundColor: 'rgba(239,68,68,0.9)',
+            borderColor: 'rgba(239,68,68,1)',
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        interaction: { mode: 'nearest', intersect: false },
+        scales: {
+          x: {
+            ticks: {
+              autoSkip: true,
+              maxTicksLimit: 10,
+              maxRotation: 15,
+              minRotation: 0,
+              callback: function(value, index) {
+                const label = times[index];
+                return label.slice(5, 16); // "MM-DD HH:mm"
+              }
+            },
+            title: { display: true, text: 'time' },
+          },
+          y: {
+            title: { display: true, text: 'ml_proba' },
+            min: 0,
+            max: 1
+          }
+        }
+      }
+    });
+  }
+</script>
+{% endblock %}

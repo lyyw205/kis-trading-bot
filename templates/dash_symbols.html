@@ -1,0 +1,263 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="layout">
+  <h1>📈 종목별 차트 & 매매 기록</h1>
+
+  <div style="display: flex; flex-direction: row; justify-content: space-between; align-items: baseline; padding: 0 10px; margin-bottom: 10px;">
+    <div class="card-header" style="margin-bottom: 0;">📊 종목별 차트 & 매매 기록</div>
+    <div>
+      <label style="font-size:12px; color:#9da4c2; margin-right:6px;">종목 선택</label>
+      <select id="symbol-select"
+              style="background:#020617; color:#e5e7eb; border:1px solid #374151; border-radius:999px; padding:4px 10px; font-size:12px;">
+        <option value="">- 종목을 선택하세요 -</option>
+        {% for sym in symbols_with_data %}
+          <option value="{{ sym }}">{{ sym }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+    
+  <section class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+
+    </div>
+
+    <div style="height:650px;">
+      <canvas id="symbolPriceChart"></canvas>
+    </div>
+
+    <p id="symbol-chart-status"
+       style="font-size:11px; color:#f97316; margin-top:4px;"></p>
+
+    <p style="font-size:11px; color:#6b7280; margin-top:4px;">
+      · 캔들은 매수/매도 주변 구간만 표시됩니다. / 초록 점: BUY / 빨간 점: SELL
+    </p>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const CURRENT_REGION = '{{ region }}';
+
+  (function () {
+    const selectEl = document.getElementById("symbol-select");
+    const canvasEl = document.getElementById("symbolPriceChart");
+    if (!selectEl || !canvasEl) return;
+
+    let symbolChart = null;
+
+    async function loadSymbolData(symbol) {
+      const res = await fetch(`/symbol_data?symbol=${encodeURIComponent(symbol)}&region=${encodeURIComponent(CURRENT_REGION)}`);
+      if (!res.ok) {
+        throw new Error("HTTP " + res.status);
+      }
+      return await res.json();
+    }
+
+  function renderSymbolChart(data, symbol) {
+    const ctx = canvasEl.getContext("2d");
+    const statusEl = document.getElementById("symbol-chart-status");
+
+    if (statusEl) statusEl.textContent = "";
+
+    if (symbolChart) {
+      symbolChart.destroy();
+      symbolChart = null;
+    }
+
+    let priceSeries = data.candles || [];
+    const tradesRaw = data.trades || [];
+
+    // 1) 데이터 존재 체크
+    if (!priceSeries.length) {
+      if (statusEl) statusEl.textContent = "캔들 데이터가 없어 차트를 표시할 수 없습니다.";
+      ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+      return;
+    }
+
+    if (!tradesRaw.length) {
+      if (statusEl) statusEl.textContent = "이 종목에는 아직 매수/매도 기록이 없습니다.";
+      // 그래도 캔들만 보고 싶으면 아래 두 줄을 지우고 차트 그리게 해도 됨
+      // ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+      // return;
+    }
+
+    // 2) 전체 캔들 / 전체 트레이드 사용 (잘라내지 않음)
+    const allCandles = priceSeries;
+    const tradesAll = tradesRaw.map(t => {
+      const ms = new Date(t.time).getTime();
+      return { ...t, _ms: ms };
+    });
+
+    // 3) 차트에 쓸 캔들 데이터 (전체)
+    const candleData = allCandles.map(row => ({
+      x: new Date(row.time).getTime(),
+      o: Number(row.open),
+      h: Number(row.high),
+      l: Number(row.low),
+      c: Number(row.close),
+    }));
+
+    // 4) Y축 범위 계산 (전체 구간 기준)
+    const lows  = candleData.map(c => c.l);
+    const highs = candleData.map(c => c.h);
+    let yMin = Math.min(...lows);
+    let yMax = Math.max(...highs);
+
+    const range = yMax - yMin || yMin * 0.01;
+    const pad   = range * 0.1;
+
+    yMin -= pad;
+    yMax += pad;
+
+    // 5) BUY / SELL 포인트 분류 (전체 매매 기준)
+    const buyPoints = [];
+    const sellPoints = [];
+
+    tradesAll.forEach(t => {
+      const labelSrc = (
+        t.side ||
+        t.action ||
+        t.type ||
+        t.reason ||
+        t.exit_reason ||
+        t.comment ||
+        ""
+      ).toString().toUpperCase();
+
+      const hasBuyWord = (
+        labelSrc.includes("BUY") ||
+        labelSrc.includes("ENTRY")
+      );
+
+      const hasSellWord = (
+        labelSrc.includes("SELL") ||
+        labelSrc.includes("PROFIT") ||
+        labelSrc.includes("CUT") ||
+        labelSrc.includes("LOSS") ||
+        labelSrc.includes("TP") ||
+        labelSrc.includes("STOP") ||
+        labelSrc.includes("익절") ||
+        labelSrc.includes("손절")
+      );
+
+      let isBuy = false;
+      let isSell = false;
+
+      if (hasSellWord && !hasBuyWord) {
+        isSell = true;
+      } else if (hasBuyWord && !hasSellWord) {
+        isBuy = true;
+      } else {
+        return; // 둘 다 있거나 둘 다 없으면 무시
+      }
+
+      const point = {
+        x: t._ms,
+        y: Number(t.price),
+      };
+
+      if (isBuy)  buyPoints.push(point);
+      if (isSell) sellPoints.push(point);
+    });
+
+    // 6) 차트 그리기 (이제 전체 기간 기준)
+    symbolChart = new Chart(ctx, {
+      type: "candlestick",
+      data: {
+        datasets: [
+          {
+            label: symbol + " 5m",
+            data: candleData,
+            color: {
+              up: "#22c55e",
+              down: "#ef4444",
+              unchanged: "#e5e7eb",
+            },
+            borderColor: {
+              up: "#22c55e",
+              down: "#ef4444",
+              unchanged: "#e5e7eb",
+            },
+            borderWidth: 1,
+          },
+          {
+            label: "BUY",
+            type: "scatter",
+            data: buyPoints,
+            pointRadius: 4,
+            backgroundColor: "#22c55e",
+            borderColor: "#22c55e",
+          },
+          {
+            label: "SELL",
+            type: "scatter",
+            data: sellPoints,
+            pointRadius: 4,
+            backgroundColor: "#f97316",
+            borderColor: "#f97316",
+          },
+        ],
+      },
+      options: {
+        parsing: false,
+        plugins: {
+          legend: {
+            labels: { color: "#e5e7eb" },
+          },
+        },
+        scales: {
+          x: {
+            type: "time",
+            time: {
+              unit: "hour",
+              tooltipFormat: "MM-dd HH:mm",
+            },
+            ticks: { color: "#9ca3af" },
+            grid: { color: "rgba(148, 163, 184, 0.1)" },
+          },
+          y: {
+            position: "right",
+            min: yMin,
+            max: yMax,
+            ticks: { color: "#9ca3af" },
+            grid: { color: "rgba(148, 163, 184, 0.1)" },
+          },
+        },
+      },
+    });
+
+    console.log(
+      `[${symbol}] candles: ${candleData.length}, trades: ${tradesAll.length}, BUY: ${buyPoints.length}, SELL: ${sellPoints.length}`
+    );
+  }
+
+    selectEl.addEventListener("change", async () => {
+      const sym = selectEl.value;
+      if (!sym) {
+        if (symbolChart) {
+          symbolChart.destroy();
+          symbolChart = null;
+        }
+        return;
+      }
+
+      try {
+        const data = await loadSymbolData(sym);
+        renderSymbolChart(data, sym);
+      } catch (err) {
+        console.error(err);
+        alert("심볼 차트를 불러오는 중 오류가 발생했습니다.");
+      }
+    });
+
+    if (selectEl.value) {
+      loadSymbolData(selectEl.value)
+        .then(data => renderSymbolChart(data, selectEl.value))
+        .catch(err => console.error(err));
+    }
+  })();
+</script>
+{% endblock %}

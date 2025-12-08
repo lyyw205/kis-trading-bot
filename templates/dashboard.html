@@ -1,0 +1,1157 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>Trading Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css"/>
+  <!-- Chart.js & plugins -->
+  <script src="https://cdn.jsdelivr.net/npm/luxon@1.28.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.0"></script>
+
+  <!-- ✅ 공식 캔들 플러그인 CDN -->
+  <script src="https://www.chartjs.org/chartjs-chart-financial/chartjs-chart-financial.js"></script>
+</head>
+<body>
+  <div class="layout">
+    <h1>
+      📈 Trading Dashboard
+      {% if region != 'ALL' %}
+        <span class="region-pill">{{ region }}</span>
+      {% endif %}
+    </h1>
+    <div class="region-tabs">
+      <a href="/?region=ALL" class="region-tab {% if region == 'ALL' %}active{% endif %}">
+        전체
+      </a>
+      <a href="/?region=KR" class="region-tab {% if region == 'KR' %}active{% endif %}">
+        KR
+      </a>
+      <a href="/?region=US" class="region-tab {% if region == 'US' %}active{% endif %}">
+        US
+      </a>
+      <a href="/?region=CR" class="region-tab {% if region == 'CR' %}active{% endif %}">
+        CR
+      </a>
+    </div>
+    <!-- 요약 카드 -->
+    <p style="font-size:12px; color:#9da4c2; margin-bottom:8px;">
+      보기: 
+      {% if region == 'ALL' %}전체 시장 (KR + US + CR 기준){% endif %}
+      {% if region == 'KR' %}국내 주식 (KR){% endif %}
+      {% if region == 'US' %}미국 주식 (US){% endif %}
+      {% if region == 'CR' %}코인 (CR){% endif %}
+    </p>
+    <div class="summary-grid">
+      <div class="card">
+        <div class="summary-item-title">총 트레이드 수</div>
+        <div class="summary-item-value">{{ summary.total_trades }}</div>
+      </div>
+      <div class="card">
+        <div class="summary-item-title">승률 (%)</div>
+        <div class="summary-item-value {% if summary.win_rate >= 50 %}pill-positive{% else %}pill-negative{% endif %}">
+          {{ "%.2f"|format(summary.win_rate) }}
+        </div>
+      </div>
+      <div class="card">
+        <div class="summary-item-title">트레이드당 평균 수익률 (%)</div>
+        <div class="summary-item-value {% if summary.avg_profit >= 0 %}pill-positive{% else %}pill-negative{% endif %}">
+          {{ "%.2f"|format(summary.avg_profit) }}
+        </div>
+      </div>
+      <div class="card">
+        <div class="summary-item-title">누적 수익률 (%)</div>
+        <div class="summary-item-value {% if summary.cum_return_pct >= 0 %}pill-positive{% else %}pill-negative{% endif %}">
+          {{ "%.2f"|format(summary.cum_return_pct) }}
+        </div>
+      </div>
+    </div>
+    <li class="nav-item">
+      <button class="nav-link" id="tab-btn-ai-report" data-tab="ai-report">
+        🤖 AI 리포트
+      </button>
+    </li>
+
+    <!-- 탭 내용 -->
+    <div id="tab-ai-report" class="tab-pane" style="display:none;">
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span id="ai-report-date">AI 리포트</span>
+          <small id="ai-report-created-at" class="text-muted"></small>
+        </div>
+
+        <div class="card-body" style="display:flex; gap: 20px; flex-wrap: wrap;">
+
+          <!-- 1) 일일 트레이드 리포트 -->
+          <div style="flex:1 1 30%; min-width:280px; max-width: 33%;">
+            <h5>📊 일일 트레이드 리포트</h5>
+            <pre id="ai-daily-report"
+                style="white-space:pre-wrap; max-height:400px; overflow:auto; font-size:0.9rem;"></pre>
+          </div>
+
+          <!-- 2) 전략 아이디어 브레인스토밍 -->
+          <div style="flex:1 1 30%; min-width:280px; max-width: 33%;">
+            <h5>🧠 전략 아이디어 브레인스토밍</h5>
+            <pre id="ai-strategy-ideas"
+                style="white-space:pre-wrap; max-height:400px; overflow:auto; font-size:0.9rem;"></pre>
+          </div>
+
+          <!-- 3) 모델 업데이트 / 튜닝 조언 -->
+          <div style="flex:1 1 30%; min-width:280px; max-width: 33%;">
+            <div class="d-flex justify-content-between align-items-center">
+              <h5>🛠 모델 업데이트 / 튜닝 조언</h5>
+              <small id="ai-model-advice-date" class="text-muted"></small>
+            </div>
+            <pre id="ai-model-advice"
+                style="white-space:pre-wrap; max-height:400px; overflow:auto; font-size:0.9rem;"></pre>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+        <!-- 오늘의 ML 학습 요약 & 개선안 -->
+    <div class="section">
+      <div class="card">
+        <h2>🤖 오늘의 ML 학습 요약 & 개선 제안</h2>
+        {% if suggestions and suggestions|length > 0 %}
+          <ul class="suggest-list">
+            {% for s in suggestions %}
+              <li>{{ s }}</li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p style="font-size:13px; color:#9da4c2; margin-top:6px;">
+            오늘은 아직 분석할 신호가 충분히 없습니다. 장 마감 후 다시 확인해 주세요.
+          </p>
+        {% endif %}
+      </div>
+    </div>
+    <!-- AI 의사결정 로그 -->
+    <div class="section">
+      <div class="card">
+        <h2>🤖 AI 의사결정 로그 (최근 200개 신호)</h2>
+        <div class="scroll-box">
+          <table>
+            <thead>
+              <tr>
+                <th>시간</th>
+                <th>시장</th>
+                <th>종목</th>
+                <th>가격</th>
+                <th>룰신호</th>
+                <th>ML 점수</th>
+                <th>진입허용</th>
+                <th>보유중</th>
+                <th>비고</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for s in signals %}
+              <tr>
+                <td>{{ s.time }}</td>
+                <td>{{ s.region }}</td>
+                <td>{{ s.symbol }}</td>
+                <td>{{ "%.2f"|format(s.price) }}</td>
+                <td>{% if s.entry_signal %}✅{% else %}❌{% endif %}</td>
+                <td>
+                  {% if s.ml_proba is not none %}
+                    {{ "%.3f"|format(s.ml_proba) }}
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
+                <td>
+                  {% if s.entry_allowed is none %}
+                    -
+                  {% elif s.entry_allowed %}
+                    ✅
+                  {% else %}
+                    ❌
+                  {% endif %}
+                </td>
+                <td>{% if s.has_stock %}보유{% else %}-{% endif %}</td>
+                <td>{{ s.note }}</td>
+              </tr>
+              {% endfor %}
+              {% if signals|length == 0 %}
+              <tr><td colspan="9">아직 기록된 신호가 없습니다.</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="log-section">
+            <!-- 실행 로그 -->
+      <div class="card py-log">
+        <h2>📝 실행 로그 (최근 200개)</h2>
+        <div class="scroll-box">
+          <table>
+            <thead>
+              <tr>
+                <th>시간</th>
+                <th>메시지</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for log in logs %}
+              <tr>
+                <td>{{ log.time }}</td>
+                <td>{{ log.message }}</td>
+              </tr>
+              {% endfor %}
+              {% if logs|length == 0 %}
+              <tr><td colspan="2">로그가 없습니다.</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+            <!-- 실패 내역이 있을 때만 표시 -->
+      {% if universe_failures %}
+        <div class="card universe-failures">
+          <h2>Recent backfill issues</h2>
+          <div class="scroll-box">
+            <ul>
+              {% for f in universe_failures %}
+                <li>
+                  <span class="fail-time">[{{ f.created_at }}]</span>
+                  <span class="fail-tag">{{ f.region }} {{ f.symbol }}</span>
+                  <span class="fail-type">{{ f.error_type }}</span>
+                  <span class="fail-msg">{{ f.error_message }}</span>
+                </li>
+              {% endfor %}
+            </ul>
+          </div>
+        </div>
+      {% endif %}
+    </div>
+    <!-- 트레이드 내역 -->
+    <div class="card section">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; gap:12px; flex-wrap:wrap;">
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <h2 style="margin:0;">📑 트레이드</h2>
+
+          {% if daily_summaries and daily_summaries|length > 0 %}
+          <select id="trade-date-select" class="trade-date-select">
+            <option value="ALL">전체 기간</option>
+            {% for d in daily_summaries %}
+            <option value="{{ d.date }}" {% if loop.first %}selected{% endif %}>
+              {{ d.date }} ({{ d.total_trades }}건)
+            </option>
+            {% endfor %}
+          </select>
+          {% endif %}
+        </div>
+
+        <div class="trade-date-summary">
+          <span id="trade-date-label">-</span> ·
+          트레이드 <strong id="trade-date-total">0</strong>건 ·
+          승률 <strong id="trade-date-winrate">0%</strong> ·
+          평균 <strong id="trade-date-avg">0%</strong> ·
+          누적 <strong id="trade-date-cum">0%</strong>
+        </div>
+        <button id="sync-app-fills-btn" class="sync-btn">앱 체결 동기화</button>
+      </div>
+        <div class="scroll-box">
+          <table>
+            <thead>
+              <tr>
+                <th>진입 시간</th>
+                <th>청산 시간</th>
+                <th>종목</th>
+                <th>상태</th>
+                <th>진입 수량</th>
+                <th>진입 평균가</th>
+                <th>실현 수익률(%)</th>
+                <th>진입 코멘트</th>
+                <th>청산/AI 코멘트</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for rt in round_trades %}
+                {% set key = rt.symbol ~ '__' ~ rt.round_id %}
+
+                <!-- ▽ 요약 행 (클릭해서 열고 닫기) -->
+                <tr class="round-summary-row"
+                    data-round-key="{{ key }}"
+                    data-date="{{ rt.date }}"
+                    style="cursor:pointer;">
+                  <td>{{ rt.entry_time }}</td>
+                  <td>{{ rt.exit_time }}</td>
+                  <td>{{ rt.symbol }}</td>
+                  <td>
+                    {% if rt.status == "OPEN" %}
+                      <span class="badge badge-status-open">OPEN</span>
+                    {% else %}
+                      <span class="badge badge-status-closed">CLOSED</span>
+                    {% endif %}
+                  </td>
+                  <td>{{ rt.entry_qty }}</td>
+                  <td>{{ "%.2f"|format(rt.entry_price) }}</td>
+                  <td>{{ "%.2f"|format(rt.realized_profit_pct) }}</td>
+                  <td>
+                    {% if rt.entry_comment %}{{ rt.entry_comment }}{% else %}-{% endif %}
+                  </td>
+                  <td>
+                    {% if rt.exit_comment %}{{ rt.exit_comment }}{% else %}-{% endif %}
+                  </td>
+                </tr>
+
+                <!-- ▽ 디테일 행 (처음에는 숨김) -->
+                <tr class="round-detail-row"
+                    data-round-key="{{ key }}"
+                    data-date="{{ rt.date }}"
+                    style="display:none;">
+                  <td colspan="9">
+                    <div style="border-top:1px solid #23263a; margin-top:6px; padding-top:6px;">
+                      <table style="width:100%; font-size:11px;">
+                        <thead>
+                          <tr>
+                            <th>시간</th>
+                            <th>행동</th>
+                            <th>가격</th>
+                            <th>수량</th>
+                            <th>ML 점수</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {% if key in round_details %}
+                            {% for d in round_details[key] %}
+                            <tr>
+                              <td>{{ d.time }}</td>
+                              <td>{{ d.type }}</td>
+                              <td>{{ "%.2f"|format(d.price) }}</td>
+                              <td>{{ d.qty }}</td>
+                              <td>
+                                {% if d.ml_proba is not none %}
+                                  {{ "%.3f"|format(d.ml_proba) }}
+                                {% else %}
+                                  -
+                                {% endif %}
+                              </td>
+                            </tr>
+                            {% endfor %}
+                          {% else %}
+                            <tr><td colspan="5">체결 내역이 없습니다.</td></tr>
+                          {% endif %}
+                        </tbody>
+                      </table>
+                    </div>
+                  </td>
+                </tr>
+              {% endfor %}
+
+              {% if round_trades|length == 0 %}
+                <tr><td colspan="9">아직 포지션 단위로 묶인 트레이드가 없습니다.</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="universe-panel section card">
+        <div class="universe-header">
+          <div>
+            <h2>UNIVERSE OHLCV Coverage</h2>
+            <p class="universe-updated">
+              Last updated:
+              <span>{{ last_universe_backfill or '—' }}</span>
+            </p>
+          </div>
+
+          <!-- 요약 카드 3개 정도 -->
+          <div class="universe-summary">
+            <div class="universe-summary-item">
+              <span class="label">Symbols</span>
+              <span class="value">
+                {{ num_universe_symbols }}
+              </span>
+            </div>
+            <div class="universe-summary-item">
+              <span class="label">Total candles</span>
+              <span class="value">
+                {{ total_universe_candles }}
+              </span>
+            </div>
+            <div class="universe-summary-item">
+              <span class="label">Max days covered</span>
+              <span class="value">
+                {{ max_days_covered }}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="universe-table-wrapper">
+          <table class="universe-table">
+            <thead>
+              <tr>
+                <th>Region</th>
+                <th>Symbol</th>
+                <th>Interval</th>
+                <th class="text-right">Candles</th>
+                <th class="text-right">Days</th>
+                <th>Start</th>
+                <th>End</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in universe_cov %}
+                {% set days = row.days_covered|int %}
+                <tr>
+                  <td>{{ row.region }}</td>
+                  <td><code>{{ row.symbol }}</code></td>
+                  <td>{{ row.interval }}</td>
+                  <td class="text-right">{{ row.candles }}</td>
+                  <td class="text-right">
+                    {% if days >= 20 %}
+                      <span class="badge badge-good">{{ days }}</span>
+                    {% elif days >= 5 %}
+                      <span class="badge badge-mid">{{ days }}</span>
+                    {% else %}
+                      <span class="badge badge-bad">{{ days }}</span>
+                    {% endif %}
+                  </td>
+                  <td>{{ row.first_dt }}</td>
+                  <td>{{ row.last_dt }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card ml-mornitor-section">
+        <div class="ml-chart1">
+          <h3>ML 확률 분포 (히스토그램)</h3>
+          <canvas id="mlHistChart"></canvas>
+        </div>
+        <div class="ml-chart2">
+          <h3>시간대별 ML 확률 & 진입 허용</h3>
+          <canvas id="mlTimeChart"></canvas>
+        </div>
+      </div>
+      <div class="ml-section">
+        <div class="card scroll-box ml-history">
+          <h2>ML 모델 버전 히스토리</h2>
+          <table class="table table-sm table-striped">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>생성일시</th>
+                <th>모델 경로</th>
+                <th>학습 샘플 수</th>
+                <th>검증 정확도(%)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for m in model_versions %}
+              <tr>
+                <td>{{ m.id }}</td>
+                <td>{{ m.created_at }}</td>
+                <td>{{ m.path }}</td>
+                <td>{{ m.n_samples }}</td>
+                <td>{{ "%.2f"|format((m.val_accuracy or 0) * 100) }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="card scroll-box ml-history2">
+          <h2>백테스트 결과 (최근 50개)</h2>
+          <table class="table table-sm table-bordered">
+          <thead>
+              <tr>
+              <th>ID</th>
+              <th>모델(ID / 버전)</th>
+              <th>기간</th>
+              <th>트레이드 수</th>
+              <th>승률(%)</th>
+              <th>평균 수익률(%)</th>
+              <th>누적 수익률(%)</th>
+              <th>최대낙폭(%)</th>
+              <th>메모</th>
+              </tr>
+          </thead>
+          <tbody>
+              {% for b in backtests %}
+              <tr>
+              <td>{{ b.id }}</td>
+              <td>
+                  {{ b.model_id }} /
+                  {{ b.model_name }} {{ b.model_version }}
+              </td>
+              <td>{{ b.start_date }} ~ {{ b.end_date }}</td>
+              <td>{{ b.trades }}</td>
+              <td>{{ "%.2f"|format(b.win_rate or 0) }}</td>
+              <td>{{ "%.2f"|format(b.avg_profit or 0) }}</td>
+              <td>{{ "%.2f"|format(b.cum_return or 0) }}</td>
+              <td>{{ "%.2f"|format(b.max_dd or 0) }}</td>
+              <td>{{ b.note }}</td>
+              </tr>
+              {% endfor %}
+          </tbody>
+          </table>
+        </div>
+      </div>
+        <!-- 종목별 차트 & 매매 표시 -->
+      <section class="card section">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <h2 style="margin:0;">📊 종목별 차트 & 매매 기록</h2>
+          <div>
+            <label style="font-size:12px; color:#9da4c2; margin-right:6px;">종목 선택</label>
+            <select id="symbol-select" style="background:#020617; color:#e5e7eb; border:1px solid #374151; border-radius:999px; padding:4px 10px; font-size:12px;">
+              <option value="">- 종목을 선택하세요 -</option>
+              {% for sym in symbols_with_data %}
+                <option value="{{ sym }}">{{ sym }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <div style="height:650px;">
+          <canvas id="symbolPriceChart"></canvas>
+        </div>
+
+        <!-- ✅ 종목 차트 안내 메시지 -->
+        <p id="symbol-chart-status"
+          style="font-size:11px; color:#f97316; margin-top:4px;"></p>
+
+        <p style="font-size:11px; color:#6b7280; margin-top:4px;">
+          · 캔들은 매수/매도 주변 구간만 표시됩니다. / 초록 점: BUY / 빨간 점: SELL
+        </p>
+      </section>
+  </div>
+
+  <!-- 차트 스크립트 -->
+  <script>
+    const CURRENT_REGION = '{{ region }}';
+    // 파이썬 → JS 데이터 변환 (JSON 문자열 → 객체)
+    const equityData = JSON.parse('{{ equity_curve | tojson | safe }}');
+    const symbolData = JSON.parse('{{ symbols_avg | tojson | safe }}');
+
+    // 누적 수익률 차트
+    (function () {
+      const ctx = document.getElementById('equityChart');
+      if (!ctx || equityData.length === 0) return;
+
+      const labels = equityData.map(d => d.time);
+      const values = equityData.map(d => d.value);
+
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: '누적 수익률(%)',
+            data: values,
+            borderWidth: 1.5,
+            tension: 0.2,
+            pointRadius: 0,
+            borderColor: 'rgba(248,250,252,0.9)',        // 밝은 흰색 라인
+            backgroundColor: 'rgba(248,250,252,0.10)',   // 살짝 채운 영역
+          }]
+        },
+        options: {
+          plugins: {
+            legend: { display: false }
+          },
+          scales: {
+            x: { ticks: { maxTicksLimit: 6 } },
+            y: { ticks: { callback: v => v + '%' } }
+          }
+        }
+      });
+    })();
+
+    // 종목별 평균 수익률 차트
+    (function () {
+      const ctx = document.getElementById('symbolChart');
+      if (!ctx || symbolData.length === 0) return;
+
+      const labels = symbolData.map(d => d.symbol);
+      const values = symbolData.map(d => d.avg_profit);
+
+      new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: '평균 수익률(%)',
+            data: values,
+            borderWidth: 1,
+            backgroundColor: 'rgba(56,189,248,0.6)',   // 하늘색 막대
+            borderColor: 'rgba(56,189,248,0.9)',
+          }]
+        },
+        options: {
+          plugins: {
+            legend: { display: false }
+          },
+          scales: {
+            y: { ticks: { callback: v => v + '%' } }
+          }
+        }
+      });
+    })();
+
+    const mlHistLabels = JSON.parse('{{ ml_hist_labels | tojson | safe }}');
+    const mlHistCounts = JSON.parse('{{ ml_hist_counts | tojson | safe }}');
+    const mlTimeSeries = JSON.parse('{{ ml_time_series | tojson | safe }}');
+
+    // 1) 히스토그램 차트
+    if (mlHistLabels.length > 0) {
+      const ctxHist = document.getElementById('mlHistChart').getContext('2d');
+      new Chart(ctxHist, {
+        type: 'bar',
+        data: {
+          labels: mlHistLabels,
+          datasets: [{
+            label: '신호 수',
+            data: mlHistCounts,
+            backgroundColor: 'rgba(129,140,248,0.7)',   // 보라빛
+            borderColor: 'rgba(129,140,248,1)',
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: {
+            legend: { display: false },
+            title: { display: false }
+          },
+          scales: {
+            x: { title: { display: true, text: 'ml_proba 구간' } },
+            y: { title: { display: true, text: 'count' }, beginAtZero: true }
+          }
+        }
+      });
+    }
+
+    // 2) 시간 시계열 차트
+    if (mlTimeSeries.length > 0) {
+      const times = mlTimeSeries.map(d => d.time);
+      const probas = mlTimeSeries.map(d => d.proba);
+      const allowedPoints = mlTimeSeries
+        .map((d, idx) => d.entry_allowed ? { x: idx, y: probas[idx] } : null)
+        .filter(d => d !== null);
+
+      const ctxTime = document.getElementById('mlTimeChart').getContext('2d');
+      new Chart(ctxTime, {
+        type: 'line',
+        data: {
+          labels: times,
+          datasets: [
+            {
+              label: 'ml_proba',
+              data: probas,
+              tension: 0.2,
+              pointRadius: 2,
+              borderColor: 'rgba(52,211,153,0.9)',       // 초록 라인
+              backgroundColor: 'rgba(52,211,153,0.15)',
+            },
+            {
+              label: 'entry_allowed=1',
+              type: 'scatter',
+              data: allowedPoints,
+              pointRadius: 5,
+              pointStyle: 'circle',
+              backgroundColor: 'rgba(239,68,68,0.9)',    // 빨간 점
+              borderColor: 'rgba(239,68,68,1)',
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          interaction: { mode: 'nearest', intersect: false },
+          scales: {
+            x: {
+              // ✅ 카테고리 축 그대로 두고 라벨만 가공
+              ticks: {
+                autoSkip: true,
+                maxTicksLimit: 10,
+                maxRotation: 15,
+                minRotation: 0,
+                callback: function(value, index) {
+                  const label = times[index]; // "2025-11-27 03:15"
+                  // "MM-DD HH:mm"만 남기기
+                  return label.slice(5, 16);
+                }
+              },
+              title: { display: true, text: 'time' },
+            },
+            y: {
+              title: { display: true, text: 'ml_proba' },
+              min: 0,
+              max: 1
+            }
+          }
+        }
+      });
+    }
+
+    (function () {
+      const summaryRows = document.querySelectorAll('.round-summary-row');
+      if (!summaryRows.length) return;
+
+      summaryRows.forEach(row => {
+        row.addEventListener('click', () => {
+          const key = row.getAttribute('data-round-key');
+          const detailRow = document.querySelector(
+            `.round-detail-row[data-round-key="${key}"]`
+          );
+          if (!detailRow) return;
+
+          const current = detailRow.style.display;
+          detailRow.style.display = (!current || current === 'none') ? 'table-row' : 'none';
+        });
+      });
+    })();
+    // 앱 체결 수동 동기화 버튼
+    document.getElementById("sync-app-fills-btn")?.addEventListener("click", () => {
+  
+      if (!confirm("앱 체결내역을 동기화할까요?")) return;
+
+      fetch("/sync_app_fills", { method: "POST" })
+        .then(res => res.json())
+        .then(data => {
+          if (data.status === "ok") {
+            alert("동기화 완료!\n" + data.message);
+            location.reload();
+          } else {
+            alert("동기화 실패:\n" + data.message);
+          }
+        })
+        .catch(err => alert("에러: " + err));
+    });
+        // 날짜 드롭다운으로 트레이드/요약 필터
+    (function () {
+      const dailySummaries = JSON.parse('{{ daily_summaries | tojson | safe }}');
+      const select = document.getElementById('trade-date-select');
+      if (!select || !dailySummaries.length) return;
+
+      const elDate = document.getElementById('trade-date-label');
+      const elCnt  = document.getElementById('trade-date-total');
+      const elWin  = document.getElementById('trade-date-winrate');
+      const elAvg  = document.getElementById('trade-date-avg');
+      const elCum  = document.getElementById('trade-date-cum');
+
+      function updateSummary(dateValue) {
+        if (dateValue === 'ALL') {
+          elDate.textContent = '전체 기간';
+          elCnt.textContent  = '{{ summary.total_trades }}';
+          elWin.textContent  = '{{ "%.2f"|format(summary.win_rate) }}%';
+          elAvg.textContent  = '{{ "%.2f"|format(summary.avg_profit) }}%';
+          elCum.textContent  = '{{ "%.2f"|format(summary.cum_return_pct) }}%';
+          return;
+        }
+        const found = dailySummaries.find(d => d.date === dateValue);
+        if (!found) return;
+        elDate.textContent = found.date;
+        elCnt.textContent  = found.total_trades;
+        elWin.textContent  = found.win_rate.toFixed(2) + '%';
+        elAvg.textContent  = found.avg_profit.toFixed(2) + '%';
+        elCum.textContent  = found.cum_return_pct.toFixed(2) + '%';
+      }
+
+      function applyFilter(dateValue) {
+        const summaryRows = document.querySelectorAll('.round-summary-row');
+        const detailRows  = document.querySelectorAll('.round-detail-row');
+
+        summaryRows.forEach(row => {
+          const d = row.getAttribute('data-date');
+          const show = (dateValue === 'ALL' || d === dateValue);
+          row.style.display = show ? 'table-row' : 'none';
+        });
+
+        // 필터 바꾸면 디테일 행은 기본적으로 접어서 시작
+        detailRows.forEach(row => {
+          const d = row.getAttribute('data-date');
+          const show = (dateValue === 'ALL' || d === dateValue);
+          row.style.display = 'none';
+        });
+      }
+
+      select.addEventListener('change', () => {
+        const v = select.value;
+        updateSummary(v);
+        applyFilter(v);
+      });
+
+      // 초기값: select에 지정된 값 기준으로 한 번 적용
+      updateSummary(select.value);
+      applyFilter(select.value);
+    })();
+
+    (function () {
+      const selectEl = document.getElementById("symbol-select");
+      const canvasEl = document.getElementById("symbolPriceChart");
+      if (!selectEl || !canvasEl) return;
+
+      let symbolChart = null;   // 현재 종목 차트 핸들
+
+      async function loadSymbolData(symbol) {
+        const res = await fetch(`/symbol_data?symbol=${encodeURIComponent(symbol)}&region=${encodeURIComponent(CURRENT_REGION)}`);
+        if (!res.ok) {
+          throw new Error("HTTP " + res.status);
+        }
+        return await res.json();   // { ohlcv: [...], trades: [...] } 형태라고 가정
+      }
+
+    function renderSymbolChart(data, symbol) {
+      const ctx = canvasEl.getContext("2d");
+      const statusEl = document.getElementById("symbol-chart-status");
+
+      // 안내 문구 초기화
+      if (statusEl) statusEl.textContent = "";
+
+      // 기존 차트 있으면 제거
+      if (symbolChart) {
+        symbolChart.destroy();
+        symbolChart = null;
+      }
+
+      let priceSeries = data.candles || [];
+      const tradesRaw = data.trades || [];
+
+      // 0) 매수·매도 아예 없으면
+      if (!tradesRaw.length) {
+        if (statusEl) {
+          statusEl.textContent = "이 종목에는 아직 매수/매도 기록이 없습니다.";
+        }
+        ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+        return;
+      }
+
+      // 1) 캔들 데이터 없으면
+      if (!priceSeries.length) {
+        if (statusEl) {
+          statusEl.textContent = "캔들 데이터가 없어 차트를 표시할 수 없습니다.";
+        }
+        return;
+      }
+
+      // ✅ 2) 트레이드에 ms 타임스탬프 붙이기
+      const tradesAll = tradesRaw.map(t => {
+        const ms = new Date(t.time).getTime();
+        return { ...t, _ms: ms };
+      });
+
+      // 혹시라도 방어
+      if (!tradesAll.length) {
+        if (statusEl) statusEl.textContent = "이 종목에는 아직 매수/매도 기록이 없습니다.";
+        ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+        return;
+      }
+
+      // ✅ 3) 가장 최근 트레이드 기준으로만 보기
+      const latestTrade = tradesAll.reduce((a, b) => (a._ms > b._ms ? a : b));
+      const latestMs = latestTrade._ms;
+      const DAY = 24 * 60 * 60 * 1000; // 1일
+
+      // 🔹 (1) 캔들: 최근 트레이드 기준 -1일 ~ +1일만 남기기
+      const allCandles = priceSeries;  // 원본 보관
+      priceSeries = allCandles.filter(row => {
+        const ms = new Date(row.time).getTime();
+        return ms >= latestMs - DAY && ms <= latestMs + DAY;
+      });
+
+      // 캔들이 0개면, 일단 전체로 fallback
+      if (!priceSeries.length) {
+        console.warn(`[${symbol}] 최근 트레이드 주변에 캔들이 없어 전체 구간으로 fallback`);
+        priceSeries = allCandles;
+      }
+
+      // 🔹 (2) 트레이드: 마찬가지로 최근 트레이드 ±1일만 남기기
+      const trades = tradesAll.filter(t => t._ms >= latestMs - DAY && t._ms <= latestMs + DAY);
+
+      // 이제 이 이후 로직(최근 인덱스 찾기 등)은 그대로 사용
+      const candleTimes = priceSeries.map(r => new Date(r.time).getTime());
+
+
+      // 3) 각 트레이드가 가장 가까운 캔들 인덱스를 찾기
+      function findNearestIndex(targetMs) {
+        let bestIdx = 0;
+        let bestDiff = Infinity;
+        for (let i = 0; i < candleTimes.length; i++) {
+          const d = Math.abs(candleTimes[i] - targetMs);
+          if (d < bestDiff) {
+            bestDiff = d;
+            bestIdx = i;
+          }
+        }
+        return bestIdx;
+      }
+
+      let minIdx = candleTimes.length - 1;
+      let maxIdx = 0;
+      trades.forEach(t => {
+        const idx = findNearestIndex(t._ms);
+        if (idx < minIdx) minIdx = idx;
+        if (idx > maxIdx) maxIdx = idx;
+      });
+
+      // 4) 앞뒤로 40봉씩 확장
+      const PADDING = 40;
+      const startIdx = Math.max(0, minIdx - PADDING);
+      const endIdx   = Math.min(priceSeries.length - 1, maxIdx + PADDING);
+
+      const windowCandles = priceSeries.slice(startIdx, endIdx + 1);
+
+      // 5) 이 구간의 시간 범위
+      const windowStartMs = candleTimes[startIdx];
+      const windowEndMs   = candleTimes[endIdx];
+
+      // 6) 이 구간 안에 있는 트레이드만 사용
+      const tradesInWindow = trades.filter(t => t._ms >= windowStartMs && t._ms <= windowEndMs);
+
+      // 7) 캔들/포인트 데이터를 차트용으로 변환 (ms 숫자 사용)
+      const candleData = windowCandles.map(row => ({
+        x: new Date(row.time).getTime(),   // ms
+        o: Number(row.open),
+        h: Number(row.high),
+        l: Number(row.low),
+        c: Number(row.close),
+      }));
+
+        // ✅ Y축 범위 계산 (최저~최고 + 10% 패딩)
+      const lows  = candleData.map(c => c.l);
+      const highs = candleData.map(c => c.h);
+      let yMin = Math.min(...lows);
+      let yMax = Math.max(...highs);
+
+      const range = yMax - yMin || yMin * 0.01;   // 0 나누기 방지
+      const pad   = range * 0.1;                  // 10% 여유
+
+      yMin -= pad;
+      yMax += pad;
+
+      // BUY / SELL 분류 – type/side/action 중 뭐가 와도 웬만하면 잡히게
+      const buyPoints = [];
+      const sellPoints = [];
+
+      tradesInWindow.forEach(t => {
+        // side / action / type / reason / comment 등에서 텍스트 추출
+        const labelSrc = (
+          t.side ||
+          t.action ||
+          t.type ||
+          t.reason ||
+          t.exit_reason ||
+          t.comment ||
+          ""
+        ).toString().toUpperCase();
+
+        // 문자열에 따라 엔트리/청산 추정
+        const hasBuyWord = (
+          labelSrc.includes("BUY") ||
+          labelSrc.includes("ENTRY")      // ENTRY, RE_ENTRY 등
+        );
+
+        const hasSellWord = (
+          labelSrc.includes("SELL") ||
+          labelSrc.includes("PROFIT") ||  // PROFIT_5%, PROFIT_3%
+          labelSrc.includes("CUT") ||     // cut_loss
+          labelSrc.includes("LOSS") ||
+          labelSrc.includes("TP") ||      // take profit
+          labelSrc.includes("STOP") ||    // stop loss
+          labelSrc.includes("익절") ||
+          labelSrc.includes("손절")
+        );
+
+        let isBuy = false;
+        let isSell = false;
+
+        // 우선순위: 청산 단어가 있으면 SELL, 엔트리 단어가 있으면 BUY
+        if (hasSellWord && !hasBuyWord) {
+          isSell = true;
+        } else if (hasBuyWord && !hasSellWord) {
+          isBuy = true;
+        } else {
+          // 둘 다 없거나 둘 다 있는 애는 표시 안 함
+          return;
+        }
+
+        const point = {
+          x: t._ms,                // 위에서 만든 ms 시간
+          y: Number(t.price),
+        };
+
+        if (isBuy)  buyPoints.push(point);
+        if (isSell) sellPoints.push(point);
+      });
+
+      // 8) 차트 생성
+      symbolChart = new Chart(ctx, {
+        type: "candlestick",
+        data: {
+          datasets: [
+            {
+              label: symbol + " 5m",
+              data: candleData,
+              color: {
+                up: "#22c55e",
+                down: "#ef4444",
+                unchanged: "#e5e7eb",
+              },
+              borderColor: {
+                up: "#22c55e",
+                down: "#ef4444",
+                unchanged: "#e5e7eb",
+              },
+              borderWidth: 1,
+            },
+            {
+              label: "BUY",
+              type: "scatter",
+              data: buyPoints,
+              pointRadius: 4,
+              backgroundColor: "#22c55e",
+              borderColor: "#22c55e",
+            },
+            {
+              label: "SELL",
+              type: "scatter",
+              data: sellPoints,
+              pointRadius: 4,
+              backgroundColor: "#f97316",
+              borderColor: "#f97316",
+            },
+          ],
+        },
+        options: {
+          parsing: false,
+          plugins: {
+            legend: {
+              labels: { color: "#e5e7eb" },
+            },
+          },
+          scales: {
+            x: {
+              type: "time",
+              time: {
+                unit: "hour",
+                tooltipFormat: "MM-dd HH:mm",
+              },
+              ticks: { color: "#9ca3af" },
+              grid: { color: "rgba(148, 163, 184, 0.1)" },
+            },
+            y: {
+              position: "right",
+              min: yMin,
+              max: yMax,
+              ticks: { color: "#9ca3af" },
+              grid: { color: "rgba(148, 163, 184, 0.1)" },
+            },
+          },
+        },
+      });
+
+      // 디버깅: 콘솔에서 한 번 체크해보고 싶으면
+      console.log(
+        `[${symbol}] candles: ${windowCandles.length}, trades: ${tradesInWindow.length}, BUY: ${buyPoints.length}, SELL: ${sellPoints.length}`
+      );
+    }
+
+      // 드롭다운 변경 시
+      selectEl.addEventListener("change", async () => {
+        const sym = selectEl.value;
+        if (!sym) {
+          if (symbolChart) {
+            symbolChart.destroy();
+            symbolChart = null;
+          }
+          return;
+        }
+
+        try {
+          const data = await loadSymbolData(sym);
+          renderSymbolChart(data, sym);
+        } catch (err) {
+          console.error(err);
+          alert("심볼 차트를 불러오는 중 오류가 발생했습니다.");
+        }
+      });
+
+      // 초기 렌더: 첫 번째 종목 자동 로드
+      if (selectEl.value) {
+        loadSymbolData(selectEl.value)
+          .then(data => renderSymbolChart(data, selectEl.value))
+          .catch(err => console.error(err));
+      }
+    })();
+    
+    // AI 리포트 전체 불러오기
+    async function loadAiReportFull() {
+      try {
+        const res = await fetch('/api/ai-report/full');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+
+        // 상단 날짜/생성 시각
+        const dateLabel = data.date
+          ? `${data.date} 기준 AI 리포트`
+          : 'AI 리포트 (데이터 없음)';
+        document.getElementById('ai-report-date').textContent = dateLabel;
+
+        if (data.created_at) {
+          document.getElementById('ai-report-created-at').textContent =
+            `생성 시각: ${data.created_at}`;
+        } else {
+          document.getElementById('ai-report-created-at').textContent = '';
+        }
+
+        // 1) 일일 리포트
+        document.getElementById('ai-daily-report').textContent =
+          data.daily_report && data.daily_report.trim()
+            ? data.daily_report
+            : '아직 생성된 일일 트레이드 리포트가 없습니다.';
+
+        // 2) 전략 아이디어
+        document.getElementById('ai-strategy-ideas').textContent =
+          data.strategy_ideas && data.strategy_ideas.trim()
+            ? data.strategy_ideas
+            : '아직 생성된 전략 아이디어 브레인스토밍 결과가 없습니다.';
+
+        // 3) 모델 조언
+        const modelAdviceDate = data.model_advice_date
+          ? `(${data.model_advice_date} 기준)`
+          : '';
+        document.getElementById('ai-model-advice-date').textContent = modelAdviceDate;
+
+        document.getElementById('ai-model-advice').textContent =
+          data.model_advice && data.model_advice.trim()
+            ? data.model_advice
+            : '아직 저장된 모델 업데이트/튜닝 조언이 없습니다.\n\n' +
+              '👉 daily_ml_cycle.py를 한 번 실행하면 reports/ 아래에\n' +
+              '   *_model_advice.txt 파일이 생성되고 여기 표시됩니다.';
+      } catch (err) {
+        console.error('AI 리포트 로드 실패:', err);
+        document.getElementById('ai-daily-report').textContent =
+          'AI 리포트를 불러오는 중 오류가 발생했습니다.';
+        document.getElementById('ai-strategy-ideas').textContent = '';
+        document.getElementById('ai-model-advice').textContent =
+          '모델 조언을 불러오는 중 오류가 발생했습니다.';
+      }
+    }
+
+    // 탭 클릭 시 최초 1번만 로드
+    let aiReportLoaded = false;
+    document.addEventListener('DOMContentLoaded', () => {
+      const btn = document.getElementById('tab-btn-ai-report');
+      if (!btn) return;
+
+      btn.addEventListener('click', () => {
+        // 탭 show/hide는 너 기존 로직에 맞춰서 처리
+        document.getElementById('tab-ai-report').style.display = 'block';
+
+        if (!aiReportLoaded) {
+          loadAiReportFull();
+          aiReportLoaded = true;
+        }
+      });
+    });
+
+
+  </script>
+</body>
+</html>

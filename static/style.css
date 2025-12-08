@@ -1,0 +1,538 @@
+* { box-sizing: border-box; }
+body {
+    margin: 0;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #050509;
+    color: #f5f5f5;
+
+}
+a { color: inherit; }
+
+.layout {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 24px 16px 40px;
+}
+
+h1 {
+    font-size: 26px;
+    margin: 0 0 16px;
+}
+h2 {
+    font-size: 18px;
+    margin: 0 0 12px;
+}
+.region-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.region-tab {
+  font-size: 13px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #374151;
+  color: #9ca3af;
+  text-decoration: none;
+  background: #020617;
+}
+
+.region-tab:hover {
+  border-color: #4b5563;
+  color: #e5e7eb;
+}
+
+.region-tab.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: #f9fafb;
+}
+
+.region-pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #111827;
+  border: 1px solid #4b5563;
+  color: #e5e7eb;
+  vertical-align: middle;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 16px;
+}
+
+.card {
+    background: #11131b;
+    border-radius: 12px;
+    padding: 16px 18px;
+    border: 1px solid rgba(255,255,255,0.04);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+}
+
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0,1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+}
+.summary-item-title {
+    font-size: 12px;
+    color: #9da4c2;
+    margin-bottom: 4px;
+}
+.summary-item-value {
+    font-size: 20px;
+    font-weight: 600;
+}
+
+.pill-positive { color: #2ecc71; }
+.pill-negative { color: #ff5c7b; }
+
+.section {
+    margin: 20px 0;
+}
+
+.log-section {
+    margin: 20px 0;
+    display: flex;
+    flex-direction: row;
+    gap: 16px;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+th, td {
+    padding: 6px 8px;
+    border-bottom: 1px solid #23263a;
+}
+th {
+    text-align: left;
+    font-weight: 500;
+    color: #9da4c2;
+    top: 0;
+    background: #11131b;
+    z-index: 1;
+}
+tr:nth-child(even) td {
+    background: rgba(255,255,255,0.01);
+}
+
+.badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 10px;
+}
+.badge-buy { background: rgba(46, 204, 113, 0.16); color: #2ecc71; }
+.badge-sell { background: rgba(255, 92, 123, 0.16); color: #ff5c7b; }
+
+.scroll-box {
+    max-height: 260px;
+    overflow-y: auto;
+    border-radius: 10px;
+    border: 1px solid #23263a;
+}
+
+.two-cols {
+    display: grid;
+    grid-template-columns: minmax(0, 1.7fr) minmax(0, 1.3fr);
+    gap: 16px;
+}
+
+canvas {
+    width: 100% !important;
+}
+
+@media (max-width: 900px) {
+    .summary-grid {
+    grid-template-columns: repeat(2, minmax(0,1fr));
+    }
+    .two-cols {
+    grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+.suggest-list {
+    margin: 8px 0 0;
+    padding-left: 18px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: #d4d8f0;
+}
+.suggest-list li {
+    margin-bottom: 4px;
+}
+.universe-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 24px;
+    margin-bottom: 12px;
+}
+
+.ml-mornitor-section {
+    display: flex;
+    flex-direction: row;
+    gap: 30px;
+    padding-bottom: 90px;
+    justify-content: space-evenly;
+}
+
+/* 부모 박스 높이 설정 */
+.ml-chart1 {
+  height: 320px;   /* 히스토그램 높이 */
+}
+
+.ml-chart2 {
+  height: 320px;   /* 타임 차트 높이 */
+}
+
+
+/* Chart.js가 넣은 inline height/width를 덮어쓰기 */
+.ml-chart1 canvas,
+.ml-chart2 canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.card-header {
+    margin: 30px 0 10px 0;
+    font-weight: bold;
+}
+
+.universe-header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+}
+
+.universe-updated {
+    margin: 4px 0 0;
+    font-size: 0.85rem;
+    color: #9ca3af;
+}
+
+.universe-updated span {
+    color: #e5e7eb;
+}
+
+/* 상단 요약 카드들 */
+.universe-summary {
+    display: flex;
+    gap: 12px;
+}
+
+.universe-summary-item {
+    padding: 8px 12px;
+    border-radius: 10px;
+    background: rgba(31, 41, 55, 0.9); /* 진한 회색 카드 */
+    border: 1px solid rgba(55, 65, 81, 0.9);
+    min-width: 110px;
+}
+
+.universe-summary-item .label {
+    display: block;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #9ca3af;
+    margin-bottom: 2px;
+}
+
+.universe-summary-item .value {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #f9fafb;
+}
+
+/* 테이블 래퍼: 높이 제한 + 스크롤 + sticky header */
+.universe-table-wrapper {
+    margin-top: 8px;
+    max-height: 720px;
+    overflow-y: auto;
+    border-radius: 10px;
+    border: 1px solid rgba(55, 65, 81, 0.9);
+    background: #020617;
+}
+
+/* 실제 테이블 스타일 */
+.universe-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.universe-table thead th {
+    position: relative;
+    top: 0;
+    z-index: 1;
+    background: #030712;
+    padding: 8px 10px;
+    text-align: left;
+    font-weight: 600;
+    color: #9ca3af;
+    border-bottom: 1px solid #111827;
+}
+
+.universe-table tbody td {
+    padding: 6px 10px;
+    border-bottom: 1px solid #0f172a;
+    color: #e5e7eb;
+    white-space: nowrap;
+}
+
+.universe-table tbody tr:nth-child(even) {
+    background: rgba(15, 23, 42, 0.7);
+}
+
+.universe-table tbody tr:hover {
+    background: rgba(30, 64, 175, 0.35);
+}
+
+.universe-table .text-right {
+    text-align: right;
+}
+
+/* days 배지 색상 */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.badge-good {
+    background: rgba(22, 163, 74, 0.18);  /* 초록 */
+    color: #4ade80;
+}
+
+.badge-mid {
+    background: rgba(234, 179, 8, 0.16);  /* 노랑 */
+    color: #facc15;
+}
+
+.badge-bad {
+    background: rgba(220, 38, 38, 0.16);  /* 빨강 */
+    color: #f87171;
+}
+
+.ml-section {
+    margin: 20px 0;
+    display: flex;
+    flex-direction: row;
+    gap: 16px;
+    max-height: 280px;
+}
+
+/* 실패 리스트 */
+.universe-failures {
+    padding-top: 10px;
+    border-top: 1px dashed #374151;
+    flex: 1;
+}
+
+.universe-failures h3 {
+    font-size: 0.95rem;
+    margin: 0 0 6px;
+}
+
+.universe-failures ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    font-size: 0.8rem;
+    color: #9ca3af;
+}
+
+.universe-failures li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 4px 0;
+}
+
+.universe-failures .fail-time {
+    color: #6b7280;
+}
+
+.universe-failures .fail-tag {
+    font-weight: 600;
+    color: #e5e7eb;
+}
+
+.universe-failures .fail-type {
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: rgba(248, 113, 113, 0.16);
+    color: #f97373;
+    font-size: 0.7rem;
+}
+
+.universe-failures .fail-msg {
+    color: #9ca3af;
+}
+
+/* 작은 화면에서 정렬 깨지지 않게 */
+@media (max-width: 768px) {
+    .universe-header {
+    flex-direction: column;
+    align-items: flex-start;
+    }
+    .universe-summary {
+    width: 100%;
+    flex-wrap: wrap;
+    }
+    .universe-summary-item {
+    flex: 1 1 30%;
+    }
+}
+
+.trade-tabs {
+    display: inline-flex;
+    gap: 8px;
+    margin-bottom: 10px;
+    border-radius: 999px;
+    background: #050816;
+    padding: 4px;
+}
+.trade-tab-btn {
+    border: none;
+    background: transparent;
+    color: #9da4c2;
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+}
+.trade-tab-btn.active {
+    background: #1e293b;
+    color: #e5e7eb;
+    font-weight: 600;
+}
+
+.badge-status-open {
+    background: rgba(250, 204, 21, 0.16);
+    color: #facc15;
+}
+.badge-status-closed {
+    background: rgba(34, 197, 94, 0.16);
+    color: #4ade80;
+}
+
+.sync-btn {
+    font-size: 12px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid #374151;
+    background: #020617;
+    color: #e5e7eb;
+    cursor: pointer;
+    margin-left: 8px;
+}
+.sync-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.trade-date-select {
+    background:#020617;
+    border:1px solid #374151;
+    color:#e5e7eb;
+    border-radius:999px;
+    padding:6px 10px;
+    font-size:12px;
+}
+.trade-date-summary {
+    font-size:12px;
+    color:#9da4c2;
+    white-space:nowrap;
+}
+.trade-date-summary strong {
+    color:#e5e7eb;
+}
+
+
+.app-layout {
+  display: flex;
+  min-height: 100vh;
+  background: #020617;
+  color: #e5e7eb;
+}
+
+.sidebar {
+  width: 220px;
+  background: #020617;
+  border-right: 1px solid #111827;
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sidebar-header h2 {
+  font-size: 16px;
+  margin: 0 0 4px 0;
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.nav-link {
+  display: block;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  color: #9ca3af;
+  text-decoration: none;
+}
+
+.nav-link.active {
+  background: #1d2a4a;
+  color: #e5e7eb;
+}
+
+.sidebar-region-tabs {
+  margin-top: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.sidebar-region-tabs a {
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid #374151;
+  color: #9ca3af;
+  text-decoration: none;
+}
+
+.sidebar-region-tabs a.active {
+  background: #374151;
+  color: #f9fafb;
+}
+
+.main-content {
+  flex: 1;
+  padding: 16px 20px;
+  overflow-x: hidden;
+}
+
+/* 기존 .layout, .card 등 스타일은 그대로 둬도 되고, 
+   .main-content 안에서 .layout을 한 번 더 써도 됨 */

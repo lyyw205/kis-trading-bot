@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="layout">
+  <h1>📈 Trading Dashboard</h1>
+
+  <!-- 요약 카드 -->
+  <div class="summary-grid">
+    <div class="card">
+      <div class="summary-item-title">총 트레이드 수</div>
+      <div class="summary-item-value">{{ summary.total_trades }}</div>
+    </div>
+    <div class="card">
+      <div class="summary-item-title">승률 (%)</div>
+      <div class="summary-item-value {% if summary.win_rate >= 50 %}pill-positive{% else %}pill-negative{% endif %}">
+        {{ "%.2f"|format(summary.win_rate) }}
+      </div>
+    </div>
+    <div class="card">
+      <div class="summary-item-title">트레이드당 평균 수익률 (%)</div>
+      <div class="summary-item-value {% if summary.avg_profit >= 0 %}pill-positive{% else %}pill-negative{% endif %}">
+        {{ "%.2f"|format(summary.avg_profit) }}
+      </div>
+    </div>
+    <div class="card">
+      <div class="summary-item-title">누적 수익률 (%)</div>
+      <div class="summary-item-value {% if summary.cum_return_pct >= 0 %}pill-positive{% else %}pill-negative{% endif %}">
+        {{ "%.2f"|format(summary.cum_return_pct) }}
+      </div>
+    </div>
+  </div>
+
+  <!-- Equity Curve -->
+  <div class="card section">
+    <h2>📈 Equity Curve</h2>
+    <canvas id="equityChart" height="120"></canvas>
+  </div>
+
+  <!-- 종목별 평균 수익률 -->
+  <div class="card section">
+    <h2>📊 종목별 평균 수익률</h2>
+    <canvas id="symbolChart" height="120"></canvas>
+  </div>
+
+  <!-- 오늘의 ML 학습 요약 & 개선안 -->
+  <div class="section">
+    <div class="card">
+      <h2>🤖 오늘의 ML 학습 요약 & 개선 제안</h2>
+      {% if suggestions and suggestions|length > 0 %}
+        <ul class="suggest-list">
+          {% for s in suggestions %}
+            <li>{{ s }}</li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p style="font-size:13px; color:#9da4c2; margin-top:6px;">
+          오늘은 아직 분석할 신호가 충분히 없습니다. 장 마감 후 다시 확인해 주세요.
+        </p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const equityData = JSON.parse('{{ equity_curve | tojson | safe }}');
+  const symbolData = JSON.parse('{{ symbols_avg | tojson | safe }}');
+
+  // Equity Curve
+  (function () {
+    const ctx = document.getElementById('equityChart');
+    if (!ctx || equityData.length === 0) return;
+
+    const labels = equityData.map(d => d.time);
+    const values = equityData.map(d => d.value);
+
+    new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          data: values,
+          borderWidth: 1.5,
+          tension: 0.2,
+          pointRadius: 0,
+          borderColor: 'rgba(248,250,252,0.9)',
+          backgroundColor: 'rgba(248,250,252,0.10)',
+        }]
+      },
+      options: {
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { maxTicksLimit: 6 } },
+          y: { ticks: { callback: v => v + '%' } }
+        }
+      }
+    });
+  })();
+
+  // Symbol avg profit
+  (function () {
+    const ctx = document.getElementById('symbolChart');
+    if (!ctx || symbolData.length === 0) return;
+
+    const labels = symbolData.map(d => d.symbol);
+    const values = symbolData.map(d => d.avg_profit);
+
+    new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          data: values,
+          borderWidth: 1,
+          backgroundColor: 'rgba(56,189,248,0.6)',
+          borderColor: 'rgba(56,189,248,0.9)',
+        }]
+      },
+      options: {
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { ticks: { callback: v => v + '%' } }
+        }
+      }
+    });
+  })();
+</script>
+{% endblock %}

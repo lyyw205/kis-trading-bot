@@ -1,0 +1,573 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="layout">
+  <h1>⚙️ 자동매매</h1>
+  <div style="display: flex; flex-direction: row; justify-content: space-between; align-items: baseline;">
+    <div class="card-header">📑 트레이드</div>
+    <div class="trade-date-summary">
+      <span id="trade-date-label">-</span> ·
+      트레이드 <strong id="trade-date-total">0</strong>건 ·
+      승률 <strong id="trade-date-winrate">0%</strong> ·
+      평균 <strong id="trade-date-avg">0%</strong> ·
+      누적 <strong id="trade-date-cum">0%</strong>
+    </div>
+  </div>
+  <!-- 1) 트레이드 섹션 -->
+  
+  <div class="card" style="max-height: 320px;">
+    <div style="display:flex; justify-content:end; align-items:center; margin-bottom:8px; gap:12px; flex-wrap:wrap;">
+      <button id="sync-app-fills-btn" class="sync-btn">앱 체결 동기화</button>
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+        {% if daily_summaries and daily_summaries|length > 0 %}
+        <select id="trade-date-select" class="trade-date-select">
+          <option value="ALL">전체 기간</option>
+          {% for d in daily_summaries %}
+          <option value="{{ d.date }}" {% if loop.first %}selected{% endif %}>
+            {{ d.date }} ({{ d.total_trades }}건)
+          </option>
+          {% endfor %}
+        </select>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="scroll-box">
+      <table>
+        <thead>
+          <tr>
+            <th>진입 시간</th>
+            <th>청산 시간</th>
+            <th>종목</th>
+            <th>상태</th>
+            <th>진입 수량</th>
+            <th>진입 평균가</th>
+            <th>실현 수익률(%)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for rt in round_trades %}
+            {% set key = rt.symbol ~ '__' ~ rt.round_id %}
+
+            <!-- 요약 행 -->
+            <tr class="round-summary-row"
+                data-round-key="{{ key }}"
+                data-date="{{ rt.date }}"
+                style="cursor:pointer;">
+              <td>{{ rt.entry_time }}</td>
+              <td>{{ rt.exit_time }}</td>
+              <td>{{ rt.symbol }}</td>
+              <td>
+                {% if rt.status == "OPEN" %}
+                  <span class="badge badge-status-open">OPEN</span>
+                {% else %}
+                  <span class="badge badge-status-closed">CLOSED</span>
+                {% endif %}
+              </td>
+              <td>{{ rt.entry_qty }}</td>
+              <td>{{ "%.2f"|format(rt.entry_price) }}</td>
+              <td>{{ "%.2f"|format(rt.realized_profit_pct) }}</td>
+            </tr>
+
+            <!-- 디테일 행 -->
+            <tr class="round-detail-row"
+                data-round-key="{{ key }}"
+                data-date="{{ rt.date }}"
+                style="display:none;">
+              <td colspan="7">
+                <div style="border-top:1px solid #23263a; margin-top:6px; padding-top:6px;">
+                  <table style="width:100%; font-size:11px;">
+                    <thead>
+                      <tr>
+                        <th style="width: 12%;">시간</th>
+                        <th style="width: 7%;">행동</th>
+                        <th style="width: 7%;">가격</th>
+                        <th style="width: 7%;">수량</th>
+                        <th style="width: 7%;">ML 점수</th>
+                        <th style="width: 60%;">AI 코멘트</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% if key in round_details %}
+                        {% for d in round_details[key] %}
+                        <tr>
+                          <td>{{ d.time }}</td>
+                          <td>{{ d.type }}</td>
+                          <td>{{ "%.2f"|format(d.price) }}</td>
+                          <td>{{ d.qty }}</td>
+                          <td>
+                            {% if d.ml_proba is not none %}
+                              {{ "%.3f"|format(d.ml_proba) }}
+                            {% else %}
+                              -
+                            {% endif %}
+                          </td>
+                          <td style="text-align: left; color: #a0aec0; padding: 10px 0;">
+                            {% if d.type == 'BUY' %}
+                                {% if rt.entry_comment %}
+                                    {{ rt.entry_comment }}
+                                {% endif %}
+                            {% else %}
+                                {% if rt.exit_comment %}
+                                    {{ rt.exit_comment }}
+                                {% endif %}
+                            {% endif %}
+                          </td>
+                        </tr>
+                        {% endfor %}
+                      {% else %}
+                        <tr><td colspan="5">체결 내역이 없습니다.</td></tr>
+                      {% endif %}
+                    </tbody>
+                  </table>
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+
+          {% if round_trades|length == 0 %}
+            <tr><td colspan="9">아직 포지션 단위로 묶인 트레이드가 없습니다.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 2) 종목별 차트 & 매매 기록 -->
+  <div style="margin-top: 24px;">
+    <div style="display: flex; flex-direction: row; justify-content: space-between; align-items: baseline; padding: 0 10px; margin-bottom: 10px;">
+      <div class="card-header" style="margin-bottom: 0;">📈 종목별 차트 & 매매 기록</div>
+      <div>
+        <label style="font-size:12px; color:#9da4c2; margin-right:6px;">종목 선택</label>
+        <select id="symbol-select"
+                style="background:#020617; color:#e5e7eb; border:1px solid #374151; border-radius:999px; padding:4px 10px; font-size:12px;">
+          <option value="">- 종목을 선택하세요 -</option>
+          {% for sym in symbols_with_data %}
+            <option value="{{ sym }}">{{ sym }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+      
+    <section class="card">
+      <div style="height:650px;">
+        <canvas id="symbolPriceChart"></canvas>
+      </div>
+
+      <p id="symbol-chart-status"
+         style="font-size:11px; color:#f97316; margin-top:4px;"></p>
+
+      <p style="font-size:11px; color:#6b7280; margin-top:4px;">
+        · 캔들은 전체 구간(최대 500개 캔들)에 대해 표시됩니다. / 초록 점: BUY / 빨간 점: SELL
+      </p>
+    </section>
+  </div>
+
+  <!-- 3) AI 의사결정 로그 -->
+  <div>
+    <div class="card-header">🤖 AI 의사결정 로그 (최근 200개 신호)</div>
+    <div class="card">
+      <div class="scroll-box">
+        <table>
+          <thead>
+            <tr>
+              <th>시간</th>
+              <th>시장</th>
+              <th>종목</th>
+              <th>가격</th>
+              <th>룰신호</th>
+              <th>ML 점수</th>
+              <th>진입허용</th>
+              <th>보유중</th>
+              <th>비고</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for s in signals %}
+            <tr>
+              <td>{{ s.time }}</td>
+              <td>{{ s.region }}</td>
+              <td>{{ s.symbol }}</td>
+              <td>{{ "%.2f"|format(s.price) }}</td>
+              <td>{% if s.entry_signal %}✅{% else %}❌{% endif %}</td>
+              <td>
+                {% if s.ml_proba is not none %}
+                  {{ "%.3f"|format(s.ml_proba) }}
+                {% else %}
+                  -
+                {% endif %}
+              </td>
+              <td>
+                {% if s.entry_allowed is none %}
+                  -
+                {% elif s.entry_allowed %}
+                  ✅
+                {% else %}
+                  ❌
+                {% endif %}
+              </td>
+              <td>{% if s.has_stock %}보유{% else %}-{% endif %}</td>
+              <td>{{ s.note }}</td>
+            </tr>
+            {% endfor %}
+            {% if signals|length == 0 %}
+            <tr><td colspan="9">아직 기록된 신호가 없습니다.</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4) 실행 로그 -->
+  <div style="display: flex; flex-direction: row; gap: 20px;">
+    <div>
+        <div class="card-header">📝 실행 로그 (최근 200개)</div>
+        <div class="card scroll-box">
+          <table>
+            <thead>
+              <tr>
+                <th>시간</th>
+                <th>메시지</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for log in logs %}
+              <tr>
+                <td>{{ log.time }}</td>
+                <td>{{ log.message }}</td>
+              </tr>
+              {% endfor %}
+              {% if logs|length == 0 %}
+              <tr><td colspan="2">로그가 없습니다.</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // 라운드 디테일 토글
+  (function () {
+    const summaryRows = document.querySelectorAll('.round-summary-row');
+    if (!summaryRows.length) return;
+
+    summaryRows.forEach(row => {
+      row.addEventListener('click', () => {
+        const key = row.getAttribute('data-round-key');
+        const detailRow = document.querySelector(
+          `.round-detail-row[data-round-key="${key}"]`
+        );
+        if (!detailRow) return;
+        const current = detailRow.style.display;
+        detailRow.style.display = (!current || current === 'none') ? 'table-row' : 'none';
+      });
+    });
+  })();
+
+  // 앱 체결 동기화 버튼
+  document.getElementById("sync-app-fills-btn")?.addEventListener("click", () => {
+    if (!confirm("앱 체결내역을 동기화할까요?")) return;
+
+    fetch("/sync_app_fills", { method: "POST" })
+      .then(res => res.json())
+      .then(data => {
+        if (data.status === "ok") {
+          alert("동기화 완료!\n" + data.message);
+          location.reload();
+        } else {
+          alert("동기화 실패:\n" + data.message);
+        }
+      })
+      .catch(err => alert("에러: " + err));
+  });
+
+  // 날짜 드롭다운 필터 + 요약
+  (function () {
+    const dailySummaries = JSON.parse('{{ daily_summaries | tojson | safe }}');
+    const select = document.getElementById('trade-date-select');
+
+    const elDate = document.getElementById('trade-date-label');
+    const elCnt  = document.getElementById('trade-date-total');
+    const elWin  = document.getElementById('trade-date-winrate');
+    const elAvg  = document.getElementById('trade-date-avg');
+    const elCum  = document.getElementById('trade-date-cum');
+
+    function setTotalSummary() {
+      elDate.textContent = '전체 기간';
+      elCnt.textContent  = '{{ summary.total_trades }}';
+      elWin.textContent  = '{{ "%.2f"|format(summary.win_rate) }}%';
+      elAvg.textContent  = '{{ "%.2f"|format(summary.avg_profit) }}%';
+      elCum.textContent  = '{{ "%.2f"|format(summary.cum_return_pct) }}%';
+    }
+
+    if (!select || !dailySummaries.length) {
+      setTotalSummary();
+      return;
+    }
+
+    function updateSummary(dateValue) {
+      if (dateValue === 'ALL') {
+        setTotalSummary();
+        return;
+      }
+      const found = dailySummaries.find(d => d.date === dateValue);
+      if (!found) return;
+      elDate.textContent = found.date;
+      elCnt.textContent  = found.total_trades;
+      elWin.textContent  = found.win_rate.toFixed(2) + '%';
+      elAvg.textContent  = found.avg_profit.toFixed(2) + '%';
+      elCum.textContent  = found.cum_return_pct.toFixed(2) + '%';
+    }
+
+    function applyFilter(dateValue) {
+      const summaryRows = document.querySelectorAll('.round-summary-row');
+      const detailRows  = document.querySelectorAll('.round-detail-row');
+
+      summaryRows.forEach(row => {
+        const d = row.getAttribute('data-date');
+        const show = (dateValue === 'ALL' || d === dateValue);
+        row.style.display = show ? 'table-row' : 'none';
+      });
+
+      detailRows.forEach(row => {
+        row.style.display = 'none';
+      });
+    }
+
+    select.addEventListener('change', () => {
+      const v = select.value;
+      updateSummary(v);
+      applyFilter(v);
+    });
+
+    // 초기 적용
+    updateSummary(select.value);
+    applyFilter(select.value);
+  })();
+
+  // 종목별 차트 & 매매 기록 (자동매매 페이지 내)
+  (function () {
+    const CURRENT_REGION = '{{ region }}';
+    const selectEl = document.getElementById("symbol-select");
+    const canvasEl = document.getElementById("symbolPriceChart");
+    if (!selectEl || !canvasEl) return;
+
+    let symbolChart = null;
+
+    async function loadSymbolData(symbol) {
+      const res = await fetch(`/symbol_data?symbol=${encodeURIComponent(symbol)}&region=${encodeURIComponent(CURRENT_REGION)}`);
+      if (!res.ok) {
+        throw new Error("HTTP " + res.status);
+      }
+      return await res.json();
+    }
+
+    function renderSymbolChart(data, symbol) {
+      const ctx = canvasEl.getContext("2d");
+      const statusEl = document.getElementById("symbol-chart-status");
+
+      if (statusEl) statusEl.textContent = "";
+
+      if (symbolChart) {
+        symbolChart.destroy();
+        symbolChart = null;
+      }
+
+      let priceSeries = data.candles || [];
+      const tradesRaw = data.trades || [];
+
+      // 캔들 없으면 종료
+      if (!priceSeries.length) {
+        if (statusEl) statusEl.textContent = "캔들 데이터가 없어 차트를 표시할 수 없습니다.";
+        ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+        return;
+      }
+
+      // 매매가 하나도 없으면 안내만 띄우고 캔들만 그릴지 말지는 선택 가능
+      if (!tradesRaw.length) {
+        if (statusEl) statusEl.textContent = "이 종목에는 아직 매수/매도 기록이 없습니다.";
+        // 캔들만 보고 싶으면 아래 return 제거
+        // ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+        // return;
+      }
+
+      // 전체 캔들 / 전체 트레이드 사용
+      const allCandles = priceSeries;
+      const tradesAll = tradesRaw.map(t => {
+        const ms = new Date(t.time).getTime();
+        return { ...t, _ms: ms };
+      });
+
+      const candleData = allCandles.map(row => ({
+        x: new Date(row.time).getTime(),
+        o: Number(row.open),
+        h: Number(row.high),
+        l: Number(row.low),
+        c: Number(row.close),
+      }));
+
+      const lows  = candleData.map(c => c.l);
+      const highs = candleData.map(c => c.h);
+      let yMin = Math.min(...lows);
+      let yMax = Math.max(...highs);
+
+      const range = yMax - yMin || yMin * 0.01;
+      const pad   = range * 0.1;
+
+      yMin -= pad;
+      yMax += pad;
+
+      const buyPoints = [];
+      const sellPoints = [];
+
+      tradesAll.forEach(t => {
+        const labelSrc = (
+          t.side ||
+          t.action ||
+          t.type ||
+          t.reason ||
+          t.exit_reason ||
+          t.comment ||
+          ""
+        ).toString().toUpperCase();
+
+        const hasBuyWord = (
+          labelSrc.includes("BUY") ||
+          labelSrc.includes("ENTRY")
+        );
+
+        const hasSellWord = (
+          labelSrc.includes("SELL") ||
+          labelSrc.includes("PROFIT") ||
+          labelSrc.includes("CUT") ||
+          labelSrc.includes("LOSS") ||
+          labelSrc.includes("TP") ||
+          labelSrc.includes("STOP") ||
+          labelSrc.includes("익절") ||
+          labelSrc.includes("손절")
+        );
+
+        let isBuy = false;
+        let isSell = false;
+
+        if (hasSellWord && !hasBuyWord) {
+          isSell = true;
+        } else if (hasBuyWord && !hasSellWord) {
+          isBuy = true;
+        } else {
+          return;
+        }
+
+        const point = {
+          x: t._ms,
+          y: Number(t.price),
+        };
+
+        if (isBuy)  buyPoints.push(point);
+        if (isSell) sellPoints.push(point);
+      });
+
+      symbolChart = new Chart(ctx, {
+        type: "candlestick",
+        data: {
+          datasets: [
+            {
+              label: symbol + " 5m",
+              data: candleData,
+              color: {
+                up: "#22c55e",
+                down: "#ef4444",
+                unchanged: "#e5e7eb",
+              },
+              borderColor: {
+                up: "#22c55e",
+                down: "#ef4444",
+                unchanged: "#e5e7eb",
+              },
+              borderWidth: 1,
+            },
+            {
+              label: "BUY",
+              type: "scatter",
+              data: buyPoints,
+              pointRadius: 4,
+              backgroundColor: "#22c55e",
+              borderColor: "#22c55e",
+            },
+            {
+              label: "SELL",
+              type: "scatter",
+              data: sellPoints,
+              pointRadius: 4,
+              backgroundColor: "#f97316",
+              borderColor: "#f97316",
+            },
+          ],
+        },
+        options: {
+          parsing: false,
+          plugins: {
+            legend: {
+              labels: { color: "#e5e7eb" },
+            },
+          },
+          scales: {
+            x: {
+              type: "time",
+              time: {
+                unit: "hour",
+                tooltipFormat: "MM-dd HH:mm",
+              },
+              ticks: { color: "#9ca3af" },
+              grid: { color: "rgba(148, 163, 184, 0.1)" },
+            },
+            y: {
+              position: "right",
+              min: yMin,
+              max: yMax,
+              ticks: { color: "#9ca3af" },
+              grid: { color: "rgba(148, 163, 184, 0.1)" },
+            },
+          },
+        },
+      });
+
+      console.log(
+        `[${symbol}] candles: ${candleData.length}, trades: ${tradesAll.length}, BUY: ${buyPoints.length}, SELL: ${sellPoints.length}`
+      );
+    }
+
+    selectEl.addEventListener("change", async () => {
+      const sym = selectEl.value;
+      if (!sym) {
+        if (symbolChart) {
+          symbolChart.destroy();
+          symbolChart = null;
+        }
+        return;
+      }
+
+      try {
+        const data = await loadSymbolData(sym);
+        renderSymbolChart(data, sym);
+      } catch (err) {
+        console.error(err);
+        alert("심볼 차트를 불러오는 중 오류가 발생했습니다.");
+      }
+    });
+
+    // 페이지 진입 시, 기본 선택값이 있으면 자동 로딩
+    if (selectEl.value) {
+      loadSymbolData(selectEl.value)
+        .then(data => renderSymbolChart(data, selectEl.value))
+        .catch(err => console.error(err));
+    }
+  })();
+</script>
+{% endblock %}
