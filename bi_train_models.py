@@ -12,10 +12,7 @@ import pandas as pd            # ✅ 추가
 
 from c_config import BI_UNIVERSE_STOCKS
 from bi_multiscale_loader import load_ohlcv_multiscale_for_symbol
-from bi_create_dataset import (
-    build_multiscale_samples_cr,
-    MultiScaleOhlcvDatasetCR,
-)
+from bi_create_dataset import MultiScaleOhlcvDatasetCR  # ✅ Dataset만
 from bi_define_models import MultiScaleTCNTransformer
 from bi_features import FEATURE_COLS, SEQ_LENS, HORIZONS, build_multiscale_samples_cr
 
@@ -104,17 +101,9 @@ def main():
     # =====================
     # 1) 데이터 모으기
     # =====================
-    feature_cols = ["open", "high", "low", "close", "volume"]
-
-    seq_lens = {
-        "5m": 48,   # 240 * 5m = 1200분 (~20시간)
-        "15m": 24,
-        "30m": 16,
-        "1h": 10,
-    }
-
-    # 5m 기준 N개 뒤 수익률 (예: 3=15m, 24=2h)
-    horizons = [3, 6, 12, 24]
+    feature_cols = FEATURE_COLS 
+    seq_lens = SEQ_LENS           
+    horizons = HORIZONS          
 
     try:
         positions_all = load_positions_all()

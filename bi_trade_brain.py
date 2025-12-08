@@ -9,9 +9,13 @@ import math
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-
+from bi_features import (            # ✅ 공통 Feature 정의에서 가져오게 변경
+    FEATURE_COLS,
+    SEQ_LENS,
+    HORIZONS,
+    # build_multiscale_samples_cr  # 실시간에서 바로 쓸 거면 이건 나중에 추가
+)
 from ai_helpers import make_entry_comment, make_exit_comment
-from c_ml_features import SEQ_LEN
 from bi_entry_hub import (
     pick_best_entry_across_universe,
     ENTRY_VERSION,
@@ -44,7 +48,7 @@ class BinanceCoinRealTimeTrader:
         self.region = "BI"
         self.fetcher = fetcher
         self.targets = targets
-        
+        MIN_BARS_5M = max(SEQ_LENS["5m"], max(HORIZONS) + 10)
         base_params = DEFAULT_ENTRY_PARAMS_MS.copy()
         if params:
             base_params.update(params)
@@ -784,8 +788,13 @@ class BinanceCoinRealTimeTrader:
                     if not price:
                         continue
 
-                    df = self.fetcher.get_coin_ohlcv(symbol, "5m", limit=120, market_type=self.market_type)
-                    if df is None or len(df) < SEQ_LEN:
+                    df = self.fetcher.get_coin_ohlcv(
+                        symbol,
+                        "5m",
+                        limit=max(120, self.MIN_BARS_5M),  # ✅ limit도 공통 기준 이상으로
+                        market_type=self.market_type,
+                    )
+                    if df is None or len(df) < self.MIN_BARS_5M:
                         continue
 
                     pos_state = self.trade_state.get(symbol, {})
@@ -1242,8 +1251,13 @@ class BinanceCoinRealTimeTrader:
                 if not price:
                     continue
 
-                df = self.fetcher.get_coin_ohlcv(symbol, "5m", limit=120, market_type=self.market_type)
-                if df is None or len(df) < SEQ_LEN:
+                df = self.fetcher.get_coin_ohlcv(
+                    symbol,
+                    "5m",
+                    limit=max(120, self.MIN_BARS_5M),  # ✅ limit도 공통 기준 이상으로
+                    market_type=self.market_type,
+                )
+                if df is None or len(df) < self.MIN_BARS_5M:
                     continue
 
                 if not holding_any and not self._is_in_cooldown(symbol):
