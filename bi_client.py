@@ -361,7 +361,7 @@ class BinanceDataFetcher:
         entry_dt = (
             datetime.fromtimestamp(first_buy_time / 1000.0)
             if first_buy_time is not None
-            else datetime.utcnow()
+            else datetime.now()
         )
 
         # qty 는 실제 잔고와 미세하게 다를 수 있지만,
@@ -480,7 +480,7 @@ class BinanceDataFetcher:
         entry_dt = (
             datetime.fromtimestamp(first_time / 1000.0)
             if first_time is not None
-            else datetime.utcnow()
+            else datetime.now()
         )
 
         return {

@@ -98,7 +98,7 @@ from c_ml_features import SEQ_LEN, calculate_rsi, build_feature_from_seq
 from f_st_entry_kr import make_entry_signal_kr
 from f_st_entry_us import make_entry_signal_us
 from bi_entry_lib import make_entry_signal_coin_ms
-from c_exit import decide_exit
+from f_exit import decide_exit
 
 
 
@@ -505,12 +505,12 @@ class GlobalRealTimeTrader:
                     {
                         "tp1": False,
                         "tp2": False,
-                        "entry_time": datetime.utcnow(),   # 매수 시점에 따로 세팅하면 더 좋음
+                        "entry_time": datetime.now(),   # 매수 시점에 따로 세팅하면 더 좋음
                         "max_profit": 0.0,
                     },
                 )
 
-                now = datetime.utcnow()
+                now = datetime.now()
 
                 # 공통 청산 로직 호출
                 sell_qty, sell_type, new_state, profit_rate, elapsed_min = decide_exit(

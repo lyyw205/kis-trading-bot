@@ -31,7 +31,7 @@ def decide_exit(
           "entry_time": datetime,
           "max_profit": float,
         }
-      - now: 기준 시각 (없으면 datetime.utcnow())
+      - now: 기준 시각 (없으면 datetime.now())
 
     출력:
       - sell_qty: 매도 수량 (0이면 매도 없음)
@@ -41,7 +41,7 @@ def decide_exit(
       - elapsed_min: 보유 시간(분)
     """
     if now is None:
-        now = datetime.utcnow()
+        now = datetime.now()
 
     if qty <= 0 or avg_price <= 0:
         return 0, "", state, 0.0, 0.0

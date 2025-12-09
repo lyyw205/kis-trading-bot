@@ -42,7 +42,7 @@ binance_client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
 KST_TZ = "Asia/Seoul"
 
 # 한 심볼에 대해 "최초 백필 시" 최대 몇 개까지 가져올지
-MAX_INITIAL_BARS = 100000   
+MAX_INITIAL_BARS = 50000   
 
 
 # -------------------------------------------

@@ -25,7 +25,7 @@ def decide_exit_coin(
 
     # 현재 시각
     if now is None:
-        now = datetime.utcnow()
+        now = datetime.now()
 
     # 비정상 방어
     if qty <= 0 or avg_price <= 0:

@@ -20,15 +20,15 @@ from bi_features import (
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-# 학습 시와 동일 설정
-FEATURE_COLS = ["open", "high", "low", "close", "volume"]
-HORIZONS = [3, 6, 12, 24]  
-SEQ_LENS = {
-    "5m": 48,
-    "15m": 24,
-    "30m": 16,
-    "1h": 10,
-}
+# # 학습 시와 동일 설정
+# FEATURE_COLS = ["open", "high", "low", "close", "volume"]
+# HORIZONS = [3, 6, 12, 24]  
+# SEQ_LENS = {
+#     "5m": 48,
+#     "15m": 24,
+#     "30m": 16,
+#     "1h": 10,
+# }
 
 def get_latest_model(pattern="models/multiscale*_model_*.pth"):
     files = glob.glob(pattern)
