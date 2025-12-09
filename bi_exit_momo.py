@@ -114,6 +114,7 @@ def decide_exit_momo(
             t_exit, t_reason, t_note = update_trailing_and_check_exit(
                 pos=pos,
                 pnl_pct=pnl_pct,
+                holding_bars=holding_bars,
                 params=params,
             )
             if t_exit:
