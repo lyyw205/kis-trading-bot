@@ -13,7 +13,8 @@ from bi_features import (            # ✅ 공통 Feature 정의에서 가져오
     FEATURE_COLS,
     SEQ_LENS,
     HORIZONS,
-    # build_multiscale_samples_cr  # 실시간에서 바로 쓸 거면 이건 나중에 추가
+    build_multiscale_samples_cr,
+    resample_from_5m,  
 )
 from ai_helpers import make_entry_comment, make_exit_comment
 from bi_entry_hub import (
@@ -293,78 +294,134 @@ class BinanceCoinRealTimeTrader:
             self.db.log(f"⚠️ [BI 복구실패] {e}")
 
     # ------------------------------------------------
-    # positions 테이블을 바이낸스 현재 상태와 동기화
+    # positions 테이블을 바이낸스 현재 상태와 동기화 (새 스키마 버전)
     # ------------------------------------------------
     def sync_positions_from_binance(self):
         """
         자동매매 시작 시점에 한 번 호출해서,
-        - 바이낸스 현재 포지션 정보를 조회하고
-        - positions 테이블을 해당 상태로 맞춘다.
+        - 현재 DB에 남아있는 OPEN 포지션을 모두 'CLOSED'로 정리하고
+        - Binance 실제 열린 포지션을 그대로 새로운 OPEN 레코드로 INSERT한다.
+
+        ⚠️ 주의:
+        - 과거에 OPEN으로 남아 있던 레코드는 여기서 전부 CLOSED 처리된다.
+        - 동기화 이후부터의 세션을 기준으로 positions를 맞추는 용도.
         """
         try:
             open_pos = self.fetcher.get_open_positions(market_type=self.market_type)
 
             if open_pos is None:
                 self.db.log("⚠️ [BI] positions 동기화 실패: get_open_positions()가 None 반환")
-                return
+                # 그래도 DB 쪽 OPEN 정리는 해준다.
+                open_pos = {}
 
+            # dict 형태 기대: { "BTCUSDT": {"qty":..., "entry_price":..., "side":..., "entry_time":...}, ... }
             open_pos = open_pos or {}
 
             conn = self.db.get_connection()
             cur = conn.cursor()
 
-            # 기존 열린 포지션들(is_open = TRUE)을 닫힘 처리
+            # 1) 이 region 의 OPEN 포지션 전부 닫기
+            #    (예전 is_open/closed_at 컬럼은 사용하지 않고 status 기반으로만 관리)
             cur.execute(
                 """
                 UPDATE positions
-                SET is_open = FALSE, closed_at = now()
-                WHERE region = %s 
-                  AND exchange = %s 
-                  AND market_type = %s 
-                  AND is_open = TRUE
+                SET status = 'CLOSED',
+                    updated_at = now()
+                WHERE region = %s
+                  AND status = 'OPEN'
                 """,
-                (self.region, "BINANCE", self.market_type),
+                (self.region,),
             )
 
-            # 바이낸스 포지션을 다시 INSERT
-            for symbol, p in open_pos.items():
-                qty = p.get("qty", 0)
-                entry_price = p.get("entry_price", 0)
-                side = p.get("side") or ("LONG" if self.market_type == "futures" else "BUY")
-                leverage = p.get("leverage", 1)
-                pnl = p.get("pnl")
-                roi = p.get("roi")
-                entry_time = p.get("entry_time") or datetime.now()
+            # 2) Binance 현재 열린 포지션들을 새로 INSERT
+            inserted_cnt = 0
+            source_label = f"BINANCE_{self.market_type.upper()}_SYNC"
 
-                cur.execute(
-                    """
-                    INSERT INTO positions (
-                        region, exchange, symbol, market_type,
-                        side, qty, entry_price, entry_time,
-                        strategy_name, ml_score_entry, ml_worst_entry, atr_ratio_entry,
-                        leverage, last_pnl, last_roi, last_sync_at,
-                        is_open, created_at
-                    ) VALUES (
-                        %s, %s, %s, %s,
-                        %s, %s, %s, %s,
-                        %s, %s, %s, %s,
-                        %s, %s, %s, now(),
-                        TRUE, now()
+            for symbol, p in open_pos.items():
+                try:
+                    qty = float(p.get("qty", 0) or 0.0)
+                    entry_price = float(p.get("entry_price", 0) or 0.0)
+                    if qty == 0 or entry_price == 0:
+                        # 의미 없는 포지션은 건너뜀
+                        continue
+
+                    side = p.get("side")
+                    # side가 없으면 기본값 추론
+                    if not side:
+                        # 선물: qty 부호로 LONG/SHORT 추론
+                        if self.market_type == "futures":
+                            side = "SHORT" if qty < 0 else "LONG"
+                        else:
+                            side = "BUY"
+
+                    # trade_type 매핑
+                    if self.market_type == "spot":
+                        trade_type = "SPOT"
+                    else:
+                        trade_type = "FUTURES_SHORT" if side.upper() == "SHORT" else "FUTURES_LONG"
+
+                    entry_time = p.get("entry_time")
+                    if entry_time is None:
+                        entry_time = datetime.now()
+
+                    # numpy / timezone 붙은 것들 정리
+                    try:
+                        entry_time = pd.Timestamp(entry_time).tz_localize(None).to_pydatetime()
+                    except Exception:
+                        entry_time = datetime.now()
+
+                    entry_notional = entry_price * abs(qty)
+
+                    cur.execute(
+                        """
+                        INSERT INTO positions (
+                            region,
+                            symbol,
+                            trade_type,
+                            source,
+                            entry_time,
+                            entry_price,
+                            entry_qty,
+                            entry_notional,
+                            signal_id,
+                            ml_proba,
+                            entry_allowed,
+                            entry_comment,
+                            status
+                        ) VALUES (
+                            %s,%s,%s,%s,
+                            %s,%s,%s,%s,
+                            %s,%s,%s,%s,%s
+                        )
+                        """,
+                        (
+                            self.region,
+                            symbol,
+                            trade_type,
+                            source_label,
+                            entry_time,
+                            entry_price,
+                            qty,
+                            entry_notional,
+                            None,      # signal_id 없음
+                            None,      # ml_proba 없음
+                            True,      # entry_allowed 기본 True
+                            None,      # entry_comment 없음
+                            "OPEN",
+                        ),
                     )
-                    """,
-                    (
-                        self.region, "BINANCE", symbol, self.market_type,
-                        side, qty, entry_price, entry_time,
-                        None, None, None, None,
-                        leverage, pnl, roi,
-                    ),
-                )
+                    inserted_cnt += 1
+                except Exception as e_inner:
+                    self.db.log(f"⚠️ [BI] positions 동기화 중 {symbol} INSERT 실패: {e_inner}")
+                    continue
 
             conn.commit()
             cur.close()
             conn.close()
 
-            self.db.log(f"✅ [BI] positions 동기화 완료 ({len(open_pos)}개)")
+            self.db.log(
+                f"✅ [BI] positions 동기화 완료 | Binance OPEN={len(open_pos)}개 → DB에 {inserted_cnt}개 INSERT"
+            )
 
         except Exception as e:
             self.db.log(f"⚠️ [BI] positions 동기화 실패: {e}")
@@ -706,6 +763,74 @@ class BinanceCoinRealTimeTrader:
                 to_remove.append(symbol)
         for s in to_remove:
             self.pending_orders.pop(s, None)
+
+    # ------------------------------------------------
+    # 멀티스케일 입력 헬퍼 (실전에서도 학습과 동일 파이프라인 사용)
+    # ------------------------------------------------
+    def make_multiscale_inputs_for_symbol(self, symbol: str):
+        """
+        1) Binance에서 5m OHLCV를 가져오고
+        2) 15m/30m/1h로 리샘플한 뒤
+        3) build_multiscale_samples_cr()로 샘플 생성
+        4) 마지막 샘플 1개만 (numpy)로 반환
+
+        추론/엔트리 로직에서는 이 결과를 받아서
+        torch 텐서로 바꾸고 모델에 넣으면 됨.
+        """
+        try:
+            df_5m = self.fetcher.get_coin_ohlcv(
+                symbol,
+                "5m",
+                limit=max(120, self.min_bars_5m),
+                market_type=self.market_type,
+            )
+        except Exception as e:
+            self.db.log(f"⚠️ [BI MS-INPUT] {symbol} 5m OHLCV 로드 실패: {e}")
+            return None
+
+        if df_5m is None or len(df_5m) < self.min_bars_5m:
+            return None
+
+        # 인덱스 정리
+        if not isinstance(df_5m.index, pd.DatetimeIndex):
+            if "dt" in df_5m.columns:
+                df_5m = df_5m.copy()
+                df_5m["dt"] = pd.to_datetime(df_5m["dt"])
+                df_5m = df_5m.set_index("dt")
+            else:
+                return None
+
+        df_5m = df_5m.sort_index()
+
+        # 15m/30m/1h 리샘플 (공통 유틸)
+        df_5m, df_15m, df_30m, df_1h = resample_from_5m(df_5m)
+
+        try:
+            X_5m, X_15m, X_30m, X_1h, Y, base_dt = build_multiscale_samples_cr(
+                df_5m=df_5m,
+                df_15m=df_15m,
+                df_30m=df_30m,
+                df_1h=df_1h,
+                feature_cols=FEATURE_COLS,
+                seq_lens=SEQ_LENS,
+                horizons=HORIZONS,
+                return_index=True,
+            )
+        except ValueError as e:
+            self.db.log(f"⚠️ [BI MS-INPUT] {symbol} 샘플 생성 실패: {e}")
+            return None
+
+        if len(X_5m) == 0:
+            return None
+
+        # 마지막 샘플만 반환 (numpy, shape: (1, L, F))
+        return {
+            "x_5m": X_5m[-1:],      # (1, L5, F)
+            "x_15m": X_15m[-1:],
+            "x_30m": X_30m[-1:],
+            "x_1h": X_1h[-1:],
+            "base_dt": base_dt[-1], # 이 시점이 기준
+        }
 
     # ------------------------------------------------
     # 메인 체크 루프

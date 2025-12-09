@@ -12,8 +12,20 @@ from numpy.lib.stride_tricks import sliding_window_view
 # 1) 공통 Feature / 시퀀스 / Horizon 정의
 # ==========================================================
 
-# 모델이 보는 입력 컬럼 (학습/실전 공통)
-FEATURE_COLS: List[str] = ["open", "high", "low", "close", "volume"]
+# 모델이 보는 기본 OHLCV 컬럼 (학습/실전 공통)
+RAW_FEATURE_COLS: List[str] = ["open", "high", "low", "close", "volume"]
+
+# 파생 피처까지 포함한 최종 Feature 컬럼 (학습/실전 공통)
+FEATURE_COLS: List[str] = RAW_FEATURE_COLS + [
+    "log_ret_1",    # 1-step 로그 수익률
+    "hl_range",     # 고저폭 / 이전 종가
+    "body",         # 몸통 길이 / 이전 종가
+    "upper_shadow", # 윗꼬리 / 이전 종가
+    "lower_shadow", # 아랫꼬리 / 이전 종가
+    "vol_chg",      # 거래량 변화율
+    "rsi_14",       # 14 period RSI
+    "vol_20",       # 20 period 수익률 변동성
+]
 
 # 멀티스케일 시퀀스 길이 (학습/실전 공통)
 SEQ_LENS: Dict[str, int] = {
@@ -32,17 +44,87 @@ HORIZONS: List[int] = [3, 6, 12, 24]
 #    → 기존 bi_create_dataset 에 있던 구현을 여기로 옮겨 붙이면 됨
 # ==========================================================
 
-def vectorized_window_scaling(windows):
+def vectorized_window_scaling(windows: np.ndarray, chunk_size: int = 20000) -> np.ndarray:
     """
     3D 배열 (N, Window, Feature)에 대해 정규화 수행
     axis=1 (시간축) 기준으로 평균/표준편차 구함
+
+    메모리 절약을 위해 N을 한 번에 처리하지 않고
+    chunk_size 단위로 나눠서 처리한다.
     """
-    # keepdims=True를 써야 (N, 1, F) 형태가 되어 브로드캐스팅 가능
-    mean = np.mean(windows, axis=1, keepdims=True)
-    std = np.std(windows, axis=1, keepdims=True) + 1e-6
-    return (windows - mean) / std
+    # 여기서는 전체를 한 번에 astype 하지 않음 (메모리 폭발 방지)
+    N, L, F = windows.shape
 
+    # 출력은 float32로 통일
+    out = np.empty((N, L, F), dtype=np.float32)
 
+    for start in range(0, N, chunk_size):
+        end = min(start + chunk_size, N)
+
+        # 이 청크만 float32로 캐스팅 (copy=False라 이미 float32면 추가 메모리 없음)
+        chunk = windows[start:end].astype(np.float32, copy=False)  # (C, L, F)
+
+        mean = np.mean(chunk, axis=1, keepdims=True, dtype=np.float32)
+        std = np.std(chunk, axis=1, keepdims=True, dtype=np.float32) + 1e-6
+
+        out[start:end] = (chunk - mean) / std
+
+    return out
+
+def add_derived_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    OHLCV DataFrame에 파생 피처를 추가해서 반환.
+    인덱스는 유지되고, NaN/inf는 0으로 정리.
+    """
+    df = df.copy()
+
+    # 기본 컬럼 float로 캐스팅
+    for col in RAW_FEATURE_COLS:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    c = df["close"]
+    o = df["open"]
+    h = df["high"]
+    l = df["low"]
+    v = df["volume"]
+
+    # 1) 로그 수익률
+    df["log_ret_1"] = np.log(c / c.shift(1))
+    df["log_ret_1"] = df["log_ret_1"].replace([np.inf, -np.inf], 0.0)
+
+    # 기준값: 이전 종가 (0으로 나누기 방지용)
+    base = c.shift(1).replace(0, np.nan)
+
+    # 2) 캔들 구조 관련
+    df["hl_range"] = (h - l) / base
+    df["body"] = (c - o) / base
+    df["upper_shadow"] = (h - np.maximum(o, c)) / base
+    df["lower_shadow"] = (np.minimum(o, c) - l) / base
+
+    # 3) 거래량 변화율 (이상치 클리핑)
+    df["vol_chg"] = v.pct_change()
+    df["vol_chg"] = df["vol_chg"].clip(-5, 5)   # 너무 큰 값은 ±500%에서 자름
+
+    # 4) RSI(14)
+    delta = c.diff()
+    up = delta.clip(lower=0)
+    down = -delta.clip(upper=0)
+
+    window = 14
+    roll_up = up.rolling(window).mean()
+    roll_down = down.rolling(window).mean()
+
+    rs = roll_up / (roll_down + 1e-6)
+    df["rsi_14"] = 100 - (100 / (1 + rs))
+
+    # 5) 20 period 변동성 (로그수익률 표준편차)
+    df["vol_20"] = df["log_ret_1"].rolling(20).std()
+
+    # NaN / inf 정리
+    df.replace([np.inf, -np.inf], np.nan, inplace=True)
+    df.fillna(0.0, inplace=True)
+
+    return df
 
 # ==========================================================
 # 3) 멀티스케일 샘플 생성 (학습/실전 공통)
@@ -159,3 +241,37 @@ def build_multiscale_samples_cr(
         return X_5m, X_15m, X_30m, X_1h, Y, base_dt
     else:
         return X_5m, X_15m, X_30m, X_1h, Y
+
+
+# ==========================================================
+# 4) 리샘플링 (학습/실전 공통)
+# ==========================================================
+RESAMPLE_AGG = {
+    "open": "first",
+    "high": "max",
+    "low": "min",
+    "close": "last",
+    "volume": "sum",
+}
+
+def resample_from_5m(df_5m: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    5분봉 원본 OHLCV(df_5m)를 받아서
+    - 5m / 15m / 30m / 1h OHLCV로 리샘플
+    - 각 타임프레임마다 add_derived_features()로 파생 피처까지 추가
+    를 한 번에 수행해서 반환.
+    """
+    df_5m = df_5m.sort_index()
+    df_5m = df_5m[RAW_FEATURE_COLS].apply(pd.to_numeric, errors="coerce").dropna()
+
+    df_15m = df_5m.resample("15min").agg(RESAMPLE_AGG).dropna()
+    df_30m = df_5m.resample("30min").agg(RESAMPLE_AGG).dropna()
+    df_1h  = df_5m.resample("60min").agg(RESAMPLE_AGG).dropna()
+
+    # 각 타임프레임별 파생 피처 추가
+    df_5m = add_derived_features(df_5m)
+    df_15m = add_derived_features(df_15m)
+    df_30m = add_derived_features(df_30m)
+    df_1h  = add_derived_features(df_1h)
+
+    return df_5m, df_15m, df_30m, df_1h

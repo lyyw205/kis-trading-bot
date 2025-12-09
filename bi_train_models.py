@@ -14,7 +14,7 @@ from c_config import BI_UNIVERSE_STOCKS
 from bi_multiscale_loader import load_ohlcv_multiscale_for_symbol
 from bi_create_dataset import MultiScaleOhlcvDatasetCR  # ✅ Dataset만
 from bi_define_models import MultiScaleTCNTransformer
-from bi_features import FEATURE_COLS, SEQ_LENS, HORIZONS, build_multiscale_samples_cr
+from bi_features import FEATURE_COLS, SEQ_LENS, HORIZONS, build_multiscale_samples_cr, add_derived_features
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -103,7 +103,11 @@ def main():
     # =====================
     feature_cols = FEATURE_COLS 
     seq_lens = SEQ_LENS           
-    horizons = HORIZONS          
+    horizons = HORIZONS    
+
+    MAX_SAMPLES_PER_SYMBOL = 50000       # 심볼당 최대 샘플 수
+    MAX_TOTAL_SAMPLES = 1500000         # 전체 합쳐서 최대 샘플 수
+    total_samples_so_far = 0            # 지금까지 모인 샘플 수 카운터      
 
     try:
         positions_all = load_positions_all()
@@ -139,6 +143,12 @@ def main():
             print(f"[WARN] {region} {symbol} OHLCV 로딩 실패: {e}")
             continue
 
+        # ✨ 여기서 각 타임프레임 DataFrame에 파생 피처 추가
+        df_5m = add_derived_features(df_5m)
+        df_15m = add_derived_features(df_15m)
+        df_30m = add_derived_features(df_30m)
+        df_1h = add_derived_features(df_1h)
+        
         try:
             X_5m, X_15m, X_30m, X_1h, Y, base_dt = build_multiscale_samples_cr(
                 df_5m=df_5m,
@@ -153,6 +163,43 @@ def main():
         except ValueError as e:
             print(f"[WARN] {region} {symbol} 샘플 생성 실패: {e}")
             continue
+
+        # -----------------------------
+        # 1) 심볼당 샘플 수 상한
+        # -----------------------------
+        n_sym = len(Y)
+        if n_sym > MAX_SAMPLES_PER_SYMBOL:
+            # 전체 구간에서 균등 간격 샘플링 (랜덤 말고 재현성 있게)
+            idx = np.linspace(0, n_sym - 1, MAX_SAMPLES_PER_SYMBOL).astype(int)
+            X_5m    = X_5m[idx]
+            X_15m   = X_15m[idx]
+            X_30m   = X_30m[idx]
+            X_1h    = X_1h[idx]
+            Y       = Y[idx]
+            base_dt = base_dt[idx]
+            n_sym = MAX_SAMPLES_PER_SYMBOL  # 갱신
+
+        # -----------------------------
+        # 2) 전체 샘플 수 상한
+        # -----------------------------
+        # 지금까지 모은 샘플 + 이번 심볼 샘플 > MAX_TOTAL_SAMPLES 이면 잘라서만 사용
+        if total_samples_so_far + n_sym > MAX_TOTAL_SAMPLES:
+            remain = MAX_TOTAL_SAMPLES - total_samples_so_far
+            if remain <= 0:
+                print("⚠️ MAX_TOTAL_SAMPLES 도달, 나머지 심볼은 스킵합니다.")
+                break  # for 심볼 루프 탈출
+
+            # 이번 심볼에서 remain 개수만 추가로 사용
+            idx = np.linspace(0, n_sym - 1, remain).astype(int)
+            X_5m    = X_5m[idx]
+            X_15m   = X_15m[idx]
+            X_30m   = X_30m[idx]
+            X_1h    = X_1h[idx]
+            Y       = Y[idx]
+            base_dt = base_dt[idx]
+            n_sym = remain  # 갱신
+
+        total_samples_so_far += n_sym
 
         X5_list_all.append(X_5m)
         X15_list_all.append(X_15m)
@@ -230,8 +277,15 @@ def main():
     # 단, Windows에서는 num_workers > 0 일 때 에러가 날 수도 있습니다. 
     # 에러 나면 다시 0으로, 안 나면 4가 훨씬 빠릅니다.
     
-    train_loader = DataLoader(train_set, batch_size=512, shuffle=True, num_workers=0)
-    val_loader = DataLoader(val_set, batch_size=512, shuffle=False, num_workers=0)
+    if DEVICE == "cuda":
+        batch_size = 1024   # 안 되면 512로
+        num_workers = 2
+    else:
+        batch_size = 256
+        num_workers = 0
+
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=(DEVICE=="cuda"))
+    val_loader   = DataLoader(val_set, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=(DEVICE=="cuda"))
 
     # =====================
     # 3) 모델 준비
@@ -267,8 +321,13 @@ def main():
     # =====================
     # 4) 학습 루프
     # =====================
-    num_epochs = 30
+    num_epochs = 50
+    patience = 7  # 개선 없으면 7 epoch 이후 stop
+    no_improve_count = 0
     best_val_loss = float("inf")
+
+    print("feature_cols:", feature_cols)
+    print("in_features:", in_features)
 
     for epoch in range(1, num_epochs + 1):
         epoch_start = time.time()
@@ -397,8 +456,14 @@ def main():
         # 모델 저장 기준은 전체 loss 기준 (필요하면 reg_loss 기준으로 바꿔도 됨)
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
+            no_improve_count = 0
             torch.save(model.state_dict(), save_path)
             print(f"  Best model updated: {save_path} (val_loss={avg_val_loss:.6f})")
+        else:
+            no_improve_count += 1
+            if no_improve_count >= patience:
+                print(f"⏹ Early stopping: {patience} epochs 동안 개선 없음.")
+                break
 
 
 if __name__ == "__main__":
