@@ -77,7 +77,7 @@ class BinanceCoinRealTimeTrader:
         self.max_pos = 1
         self.reentry_cooldown_min = 60
         self.last_exit_time: dict[str, datetime] = {}
-        self.min_final_score = 0.018
+        self.min_final_score = 0.08
         # 👉 포지션/잔고 로그용 직전 상태
         self._last_balance_log_state = {
             "pos": None,
