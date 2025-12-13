@@ -15,7 +15,7 @@ from bi_multiscale_loader import load_ohlcv_multiscale_for_symbol
 from bi_create_dataset import MultiScaleOhlcvDatasetCR  # ✅ Dataset만
 from bi_define_models import MultiScaleTCNTransformer
 from bi_features import FEATURE_COLS, SEQ_LENS, HORIZONS, build_multiscale_samples_cr, add_derived_features
-
+from c_db_manager import BotDatabase
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -30,16 +30,20 @@ def make_cls_labels(y: torch.Tensor) -> torch.Tensor:
     return (y > 0).float()
 
 def load_positions_all() -> pd.DataFrame:
-    """
-    positions 전체를 DataFrame으로 불러오는 헬퍼.
-    - region='BI' 만 사용하는 게 자연스러움.
-    - 실제 구현은 네가 쓰는 DB/클라이언트에 맞춰 채우면 됨.
-    """
-    # 예시) 만약 Supabase/Postgres를 직접 연결한다면 여기서 읽기
-    # 아래는 '직접 구현 필요'인 자리 표시자
-    # return pd.read_sql("SELECT * FROM public.positions WHERE region = 'BI';", conn)
-
-    raise NotImplementedError("load_positions_all() 안을 실제 DB 코드로 구현하세요.")
+    db = BotDatabase()  # 내부 DB_URL 사용
+    conn = db.get_connection()
+    try:
+        query = """
+            SELECT region, symbol, status, pnl_pct, entry_time
+            FROM positions
+            WHERE region = 'BI'
+              AND status = 'CLOSED'
+              AND pnl_pct IS NOT NULL
+              AND entry_time IS NOT NULL
+        """
+        return pd.read_sql_query(query, conn)
+    finally:
+        conn.close()
 
 def build_trade_labels_for_symbol(base_dt_array, positions_sym_df: pd.DataFrame):
     """

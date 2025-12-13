@@ -275,7 +275,10 @@ def run_realtime_binance_bot():
         threads.append(t_spot)
 
     # 3. Futures Trader 스레드 준비
-    if futures_targets:
+    ENABLE_BI_FUTURES = False  # ✅ 임시로 비활성화
+
+    # 3. Futures Trader 스레드 준비
+    if ENABLE_BI_FUTURES and futures_targets:
         db.log(f"🎯 [Futures] 대상 종목: {len(futures_targets)}개 -> 스레드 생성")
         trader_fut = BinanceCoinRealTimeTrader(
             fetcher=fetcher,
@@ -284,19 +287,20 @@ def run_realtime_binance_bot():
             db=db,
             dry_run=False,
             market_type="futures",
-            leverage=3  # ⚙️ 레버리지 설정
+            leverage=3
         )
 
-        # 🔹 자동매매 시작 전에, Futures 포지션을 positions 테이블과 동기화
         trader_fut.sync_positions_from_binance()
 
-        # 스레드 생성
         t_fut = threading.Thread(
             target=_run_bi_thread_loop, 
             args=(trader_fut, "BI_FUTURES_BOT", 60)
         )
         t_fut.daemon = True
         threads.append(t_fut)
+    else:
+        if futures_targets:
+            db.log("⏸️ [Futures] 잔액 이슈로 임시 비활성화됨 (ENABLE_BI_FUTURES=False)")
 
     # 4. 스레드 시작
     for t in threads:

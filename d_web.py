@@ -320,8 +320,18 @@ def load_all_dashboard_data(region_raw: str):
         ]
 
     symbols_with_data = []
-    if not trades_df.empty:
-        symbols_with_data = sorted(trades_df['symbol'].unique().tolist())
+    if not trades_df.empty and "symbol" in trades_df.columns:
+        tmp = trades_df[["symbol", "entry_time", "exit_time"]].copy()
+
+        # 심볼별 "가장 최근 활동 시간" = max(entry_time, exit_time)
+        tmp["last_time"] = tmp[["entry_time", "exit_time"]].max(axis=1)
+
+        sym_last = (
+            tmp.groupby("symbol")["last_time"]
+            .max()
+            .sort_values(ascending=False)
+        )
+        symbols_with_data = sym_last.index.tolist()
 
     return {
         "region": region,
